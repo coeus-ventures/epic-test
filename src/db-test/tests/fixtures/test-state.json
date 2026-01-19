@@ -1,0 +1,19 @@
+{
+  "users": [
+    {
+      "id": 100,
+      "name": "FromFile"
+    },
+    {
+      "id": 101,
+      "name": "AlsoFromFile"
+    }
+  ],
+  "posts": [
+    {
+      "id": 200,
+      "user_id": 100,
+      "title": "FilePost"
+    }
+  ]
+}
