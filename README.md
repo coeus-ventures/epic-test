@@ -149,7 +149,13 @@ A specification-driven testing library that parses behavior specifications and e
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Epic Specification Format
+### Epic Specification Format (Required)
+
+**IMPORTANT**: spec-test requires specifications to follow the Epic format exactly. If you have specifications in a different format, you must either:
+1. Convert your specifications to match the Epic format
+2. Write an adapter that transforms your format to Epic format before passing to `SpecTestRunner`
+
+The parser expects this **exact structure**:
 
 ```markdown
 # Behavior Name
@@ -167,6 +173,50 @@ Directory: `app/features/my-feature/`
 * Act: User fills in "value" in field name
 * Check: URL contains /expected-path
 * Check: Success message is displayed
+```
+
+### Format Requirements
+
+| Element | Required Format | Notes |
+|---------|----------------|-------|
+| Behavior name | `# Title` (H1) | First H1 in file |
+| Examples section | `## Examples` (H2) | Exact text, case-sensitive |
+| Example name | `### Name` (H3) | Under Examples section |
+| Steps marker | `#### Steps` (H4) | **Required** - steps are only parsed after this marker |
+| Act step | `* Act: instruction` | Must be after `#### Steps` |
+| Check step | `* Check: instruction` | Must be after `#### Steps` |
+
+### Adapting Other Formats
+
+If your specifications use different heading levels (e.g., `#### Examples` instead of `## Examples`), you need to write an adapter. Example:
+
+```typescript
+import { SpecTestRunner } from 'epic-test';
+import type { TestableSpec, SpecExample } from 'epic-test';
+
+// Your custom parser that converts your format to TestableSpec
+function parseMyFormat(content: string): TestableSpec[] {
+  // Parse your format and return TestableSpec objects
+  return [{
+    name: 'Behavior Name',
+    examples: [{
+      name: 'Example Name',
+      steps: [
+        { type: 'act', instruction: 'User clicks button' },
+        { type: 'check', instruction: 'Success message appears' },
+      ]
+    }]
+  }];
+}
+
+// Use with SpecTestRunner
+const runner = new SpecTestRunner({ baseUrl: 'http://localhost:3000' });
+const specs = parseMyFormat(myContent);
+
+for (const spec of specs) {
+  const result = await runner.runFromSpec(spec);
+  console.log(result.success ? 'PASS' : 'FAIL', spec.name);
+}
 ```
 
 ### Step Types
