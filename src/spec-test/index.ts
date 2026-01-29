@@ -81,16 +81,35 @@ const DIRECTORY_PATTERN = /^Directory:\s*`([^`]+)`/m;
 const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
 
 /**
- * Parses the Examples section from Epic Specification Format.
+ * Parses examples from markdown content.
  *
- * Expected format:
+ * Supports two formats:
+ *
+ * 1. Epic Format (## Examples):
  * ```markdown
  * ## Examples
- *
  * ### Example Name
- *
  * #### Steps
- * * Act: User action description
+ * * Act: User action
+ * * Check: Expected outcome
+ * ```
+ *
+ * 2. Harbor Format (## Behaviors):
+ * ```markdown
+ * ## Behaviors
+ * ### Behavior Name
+ * #### Steps
+ * * Act: User action
+ * * Check: Expected outcome
+ * ```
+ * Or with nested examples:
+ * ```markdown
+ * ## Behaviors
+ * ### Behavior Name
+ * #### Examples
+ * ##### Example Name
+ * ###### Steps
+ * * Act: User action
  * * Check: Expected outcome
  * ```
  *
@@ -98,28 +117,162 @@ const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
  * @returns Array of SpecExample objects with name and steps
  */
 export function parseExamples(content: string): SpecExample[] {
-  // Find the ## Examples section
+  // Try Epic format first: ## Examples
   const examplesMatch = content.match(/^## Examples\s*$/m);
-  if (!examplesMatch) {
-    // Fallback: treat entire content as single unnamed example (legacy format)
-    const steps = parseSteps(content);
-    if (steps.length > 0) {
-      return [{ name: "Default", steps }];
-    }
-    return [];
+  if (examplesMatch) {
+    return parseEpicExamples(content, examplesMatch);
   }
 
-  const examplesStart = examplesMatch.index! + examplesMatch[0].length;
+  // Try Harbor format: ## Behaviors
+  const behaviorsMatch = content.match(/^## Behaviors\s*$/m);
+  if (behaviorsMatch) {
+    return parseHarborBehaviors(content, behaviorsMatch);
+  }
 
-  // Find where Examples section ends (next H2 or end of file)
+  // Fallback: treat entire content as single unnamed example (legacy format)
+  const steps = parseSteps(content);
+  if (steps.length > 0) {
+    return [{ name: "Default", steps }];
+  }
+  return [];
+}
+
+/**
+ * Parse Epic format: ## Examples -> ### Example -> #### Steps
+ */
+function parseEpicExamples(content: string, match: RegExpMatchArray): SpecExample[] {
+  const examplesStart = match.index! + match[0].length;
   const nextH2Match = content.slice(examplesStart).match(/^## [^#]/m);
   const examplesEnd = nextH2Match
     ? examplesStart + nextH2Match.index!
     : content.length;
 
   const examplesContent = content.slice(examplesStart, examplesEnd);
-  const lines = examplesContent.split("\n");
+  return parseExamplesSection(examplesContent, "###", "####");
+}
 
+/**
+ * Parse Harbor format: ## Behaviors -> ### Behavior -> #### Steps or #### Examples
+ */
+function parseHarborBehaviors(content: string, match: RegExpMatchArray): SpecExample[] {
+  const behaviorsStart = match.index! + match[0].length;
+  const nextH2Match = content.slice(behaviorsStart).match(/^## [^#]/m);
+  const behaviorsEnd = nextH2Match
+    ? behaviorsStart + nextH2Match.index!
+    : content.length;
+
+  const behaviorsContent = content.slice(behaviorsStart, behaviorsEnd);
+  const lines = behaviorsContent.split("\n");
+
+  const examples: SpecExample[] = [];
+  let currentBehavior: string | null = null;
+  let currentExample: SpecExample | null = null;
+  let collectingSteps = false;
+  let inExamplesSection = false;
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+
+    // New behavior: ### Behavior Name
+    if (trimmedLine.startsWith("### ") && !trimmedLine.startsWith("#### ")) {
+      // Save previous example
+      if (currentExample && currentExample.steps.length > 0) {
+        examples.push(currentExample);
+      }
+      currentBehavior = trimmedLine.slice(4).trim();
+      currentExample = null;
+      collectingSteps = false;
+      inExamplesSection = false;
+      continue;
+    }
+
+    if (!currentBehavior) continue;
+
+    // #### Steps (simple format - behavior has direct steps)
+    if (/^#### Steps/i.test(trimmedLine) && !trimmedLine.startsWith("#####")) {
+      if (currentExample && currentExample.steps.length > 0) {
+        examples.push(currentExample);
+      }
+      // Extract example name from "#### Steps (Name)" or use behavior name
+      const nameMatch = trimmedLine.match(/^#### Steps\s*(?:\(([^)]+)\))?/i);
+      const exampleName = nameMatch?.[1]?.trim() || currentBehavior;
+      currentExample = { name: exampleName, steps: [] };
+      collectingSteps = true;
+      inExamplesSection = false;
+      continue;
+    }
+
+    // #### Examples (full format - behavior has nested examples)
+    if (/^#### Examples/i.test(trimmedLine)) {
+      inExamplesSection = true;
+      collectingSteps = false;
+      continue;
+    }
+
+    // Other #### sections end step collection
+    if (trimmedLine.startsWith("#### ") && !trimmedLine.startsWith("#####")) {
+      if (currentExample && currentExample.steps.length > 0) {
+        examples.push(currentExample);
+        currentExample = null;
+      }
+      collectingSteps = false;
+      inExamplesSection = false;
+      continue;
+    }
+
+    // ##### Example Name (inside #### Examples section)
+    if (inExamplesSection && trimmedLine.startsWith("##### ") && !trimmedLine.startsWith("######")) {
+      if (currentExample && currentExample.steps.length > 0) {
+        examples.push(currentExample);
+      }
+      currentExample = { name: trimmedLine.slice(6).trim(), steps: [] };
+      collectingSteps = false;
+      continue;
+    }
+
+    // ###### Steps (inside example)
+    if (/^###### Steps/i.test(trimmedLine)) {
+      collectingSteps = true;
+      continue;
+    }
+
+    // Parse step lines
+    if (collectingSteps && currentExample && trimmedLine.startsWith("* ")) {
+      const stepMatch = trimmedLine.match(STEP_PATTERN);
+      if (stepMatch) {
+        const [, stepType, rawInstruction] = stepMatch;
+        const instruction = rawInstruction.trim();
+
+        if (stepType === "Act") {
+          currentExample.steps.push({ type: "act", instruction });
+        } else {
+          currentExample.steps.push({
+            type: "check",
+            instruction,
+            checkType: classifyCheck(instruction),
+          });
+        }
+      }
+    }
+  }
+
+  // Don't forget the last example
+  if (currentExample && currentExample.steps.length > 0) {
+    examples.push(currentExample);
+  }
+
+  return examples;
+}
+
+/**
+ * Parse examples section with configurable heading levels.
+ */
+function parseExamplesSection(
+  content: string,
+  exampleHeading: string,
+  stepsHeading: string
+): SpecExample[] {
+  const lines = content.split("\n");
   const examples: SpecExample[] = [];
   let currentExample: SpecExample | null = null;
   let inSteps = false;
@@ -127,33 +280,32 @@ export function parseExamples(content: string): SpecExample[] {
   for (const line of lines) {
     const trimmedLine = line.trim();
 
-    // New example: ### Example Name
-    if (trimmedLine.startsWith("### ")) {
-      // Save previous example if exists
+    // New example
+    if (trimmedLine.startsWith(exampleHeading + " ")) {
       if (currentExample && currentExample.steps.length > 0) {
         examples.push(currentExample);
       }
       currentExample = {
-        name: trimmedLine.slice(4).trim(),
+        name: trimmedLine.slice(exampleHeading.length + 1).trim(),
         steps: [],
       };
       inSteps = false;
       continue;
     }
 
-    // Steps section: #### Steps
-    if (trimmedLine.toLowerCase() === "#### steps") {
+    // Steps section
+    if (trimmedLine.toLowerCase() === stepsHeading.toLowerCase() + " steps") {
       inSteps = true;
       continue;
     }
 
-    // Another #### section ends steps
-    if (trimmedLine.startsWith("#### ") && !trimmedLine.toLowerCase().includes("steps")) {
+    // Another section at same level ends steps
+    if (trimmedLine.startsWith(stepsHeading + " ") && !trimmedLine.toLowerCase().includes("steps")) {
       inSteps = false;
       continue;
     }
 
-    // Parse step lines: * Act: or * Check:
+    // Parse step lines
     if (inSteps && currentExample && trimmedLine.startsWith("* ")) {
       const match = trimmedLine.match(STEP_PATTERN);
       if (match) {
@@ -173,7 +325,6 @@ export function parseExamples(content: string): SpecExample[] {
     }
   }
 
-  // Don't forget the last example
   if (currentExample && currentExample.steps.length > 0) {
     examples.push(currentExample);
   }
