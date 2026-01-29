@@ -89,7 +89,7 @@ describe('Tester Service', () => {
 
       // Mock generateText
       const { generateText } = await import('ai');
-      vi.mocked(generateText).mockResolvedValue({
+      (generateText as any).mockResolvedValue({
         text: 'true - The condition is met',
         finishReason: 'stop',
         usage: {},
@@ -145,7 +145,7 @@ describe('Tester Service', () => {
       global.DOMParser = dom.window.DOMParser;
 
       const { generateText } = await import('ai');
-      vi.mocked(generateText)
+      (generateText as any)
         .mockResolvedValueOnce({
           text: 'false - not yet',
           finishReason: 'stop',

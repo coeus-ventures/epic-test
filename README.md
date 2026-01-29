@@ -38,7 +38,9 @@ npm install @libsql/client
 
 ### spec-test - Specification-Driven Browser Testing
 
-Write behavior specifications in markdown and execute them as browser tests:
+Write behavior specifications in **Epic format** markdown and execute them as browser tests:
+
+> **Note:** spec-test only supports the Epic specification format. If you use a different format, you'll need to write an adapter (see [spec-test documentation](#spec-test) below).
 
 ```typescript
 import { SpecTestRunner } from 'epic-test';
@@ -48,7 +50,7 @@ const runner = new SpecTestRunner({
   headless: true,
 });
 
-// Run tests from a markdown spec file
+// Run tests from a markdown spec file (must be in Epic format)
 const result = await runner.runFromFile('./specs/login.md');
 
 if (result.success) {
@@ -60,7 +62,7 @@ if (result.success) {
 await runner.close();
 ```
 
-**Spec file format (login.md):**
+**Epic format spec file (login.md):**
 
 ```markdown
 # Login
@@ -131,6 +133,14 @@ await PostDB(db, schema, {
 
 A specification-driven testing library that parses behavior specifications and executes them as browser tests using AI-powered automation.
 
+> **⚠️ IMPORTANT: Specification Format Requirement**
+>
+> **spec-test only accepts specifications in the Epic format** (see below). If your specifications use a different format (Gherkin, Cucumber, custom markdown, etc.), you **MUST** write an adapter to transform them into the Epic format before using spec-test.
+>
+> The built-in parser (`parseSpecFile`) will **fail silently or incorrectly parse** specifications that don't follow the exact Epic format structure.
+>
+> See [Adapting Other Formats](#adapting-other-formats) for guidance on writing adapters.
+
 ### Architecture
 
 ```
@@ -188,36 +198,76 @@ Directory: `app/features/my-feature/`
 
 ### Adapting Other Formats
 
-If your specifications use different heading levels (e.g., `#### Examples` instead of `## Examples`), you need to write an adapter. Example:
+**If your specifications use ANY format other than Epic format, you MUST write an adapter.**
+
+Common scenarios requiring an adapter:
+- Different heading levels (e.g., `#### Examples` instead of `## Examples`)
+- Gherkin/Cucumber format (`Given`, `When`, `Then`)
+- Custom markdown structures
+- Different keywords (e.g., `Action:` instead of `Act:`)
+- Specifications stored in YAML, JSON, or other formats
+
+#### Adapter Pattern
+
+Create a function that transforms your format into the `TestableSpec` interface:
 
 ```typescript
 import { SpecTestRunner } from 'epic-test';
-import type { TestableSpec, SpecExample } from 'epic-test';
+import type { TestableSpec, SpecExample, SpecStep } from 'epic-test';
 
-// Your custom parser that converts your format to TestableSpec
-function parseMyFormat(content: string): TestableSpec[] {
-  // Parse your format and return TestableSpec objects
-  return [{
-    name: 'Behavior Name',
-    examples: [{
-      name: 'Example Name',
-      steps: [
-        { type: 'act', instruction: 'User clicks button' },
-        { type: 'check', instruction: 'Success message appears' },
-      ]
-    }]
-  }];
+/**
+ * Adapter for Gherkin/Cucumber format
+ */
+function parseGherkinToEpic(gherkinContent: string): TestableSpec {
+  // Parse your Gherkin content
+  const feature = parseGherkin(gherkinContent);
+
+  return {
+    name: feature.name,
+    examples: feature.scenarios.map(scenario => ({
+      name: scenario.name,
+      steps: scenario.steps.map(step => {
+        // Map Given/When to Act, Then to Check
+        const type = (step.keyword === 'Then') ? 'check' : 'act';
+        return {
+          type,
+          instruction: step.text,
+          ...(type === 'check' ? { checkType: 'semantic' } : {})
+        } as SpecStep;
+      })
+    }))
+  };
 }
 
 // Use with SpecTestRunner
 const runner = new SpecTestRunner({ baseUrl: 'http://localhost:3000' });
-const specs = parseMyFormat(myContent);
-
-for (const spec of specs) {
-  const result = await runner.runFromSpec(spec);
-  console.log(result.success ? 'PASS' : 'FAIL', spec.name);
-}
+const spec = parseGherkinToEpic(gherkinContent);
+const result = await runner.runFromSpec(spec);
+console.log(result.success ? 'PASS' : 'FAIL', spec.name);
 ```
+
+#### TypeScript Interfaces
+
+Your adapter must return objects matching these interfaces:
+
+```typescript
+interface TestableSpec {
+  name: string;
+  directory?: string;
+  examples: SpecExample[];
+}
+
+interface SpecExample {
+  name: string;
+  steps: SpecStep[];
+}
+
+type SpecStep =
+  | { type: 'act'; instruction: string }
+  | { type: 'check'; instruction: string; checkType?: 'deterministic' | 'semantic' };
+```
+
+**Do not attempt to modify the built-in parser.** Write an adapter instead.
 
 ### Step Types
 

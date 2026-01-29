@@ -1,4 +1,4 @@
-export { PreDB, PreDBFromFile } from './predb';
-export { PostDB, PostDBFromFile } from './postdb';
-export type { StateObject, PreDBOptions } from './predb';
-export type { PostDBOptions } from './postdb';
+export { PreDB, PreDBFromFile } from './predb.js';
+export { PostDB, PostDBFromFile } from './postdb.js';
+export type { StateObject, PreDBOptions } from './predb.js';
+export type { PostDBOptions } from './postdb.js';

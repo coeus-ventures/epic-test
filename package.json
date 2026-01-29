@@ -53,7 +53,7 @@
     "drizzle",
     "sqlite"
   ],
-  "author": "",
+  "author": "Coeus Ventures",
   "license": "MIT",
   "dependencies": {
     "@browserbasehq/stagehand": "^3.0.7",

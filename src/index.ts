@@ -18,7 +18,7 @@ export {
   executeActStep,
   executeCheckStep,
   generateFailureContext,
-} from "./spec-test";
+} from "./spec-test/index.js";
 
 export type {
   SpecTestConfig,
@@ -32,12 +32,12 @@ export type {
   CheckResult,
   FailureContext,
   StepContext,
-} from "./spec-test";
+} from "./spec-test/index.js";
 
 // Re-export b-test
-export { Tester, TesterError } from "./b-test";
-export type { Snapshot, DiffResult } from "./b-test";
+export { Tester, TesterError } from "./b-test/index.js";
+export type { Snapshot, DiffResult } from "./b-test/index.js";
 
 // Re-export db-test
-export { PreDB, PreDBFromFile, PostDB, PostDBFromFile } from "./db-test";
-export type { StateObject, PreDBOptions, PostDBOptions } from "./db-test";
+export { PreDB, PreDBFromFile, PostDB, PostDBFromFile } from "./db-test/index.js";
+export type { StateObject, PreDBOptions, PostDBOptions } from "./db-test/index.js";

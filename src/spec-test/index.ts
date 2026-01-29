@@ -148,7 +148,9 @@ function parseEpicExamples(content: string, match: RegExpMatchArray): SpecExampl
     : content.length;
 
   const examplesContent = content.slice(examplesStart, examplesEnd);
-  return parseExamplesSection(examplesContent, "###", "####");
+  // Calculate line offset: count newlines before examplesStart
+  const lineOffset = content.slice(0, examplesStart).split('\n').length;
+  return parseExamplesSection(examplesContent, "###", "####", lineOffset);
 }
 
 /**
@@ -164,14 +166,19 @@ function parseHarborBehaviors(content: string, match: RegExpMatchArray): SpecExa
   const behaviorsContent = content.slice(behaviorsStart, behaviorsEnd);
   const lines = behaviorsContent.split("\n");
 
+  // Calculate line offset: count newlines before behaviorsStart
+  const lineOffset = content.slice(0, behaviorsStart).split('\n').length;
+
   const examples: SpecExample[] = [];
   let currentBehavior: string | null = null;
   let currentExample: SpecExample | null = null;
   let collectingSteps = false;
   let inExamplesSection = false;
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmedLine = line.trim();
+    const lineNumber = lineOffset + i + 1;
 
     // New behavior: ### Behavior Name
     if (trimmedLine.startsWith("### ") && !trimmedLine.startsWith("#### ")) {
@@ -244,12 +251,13 @@ function parseHarborBehaviors(content: string, match: RegExpMatchArray): SpecExa
         const instruction = rawInstruction.trim();
 
         if (stepType === "Act") {
-          currentExample.steps.push({ type: "act", instruction });
+          currentExample.steps.push({ type: "act", instruction, lineNumber });
         } else {
           currentExample.steps.push({
             type: "check",
             instruction,
             checkType: classifyCheck(instruction),
+            lineNumber,
           });
         }
       }
@@ -270,15 +278,18 @@ function parseHarborBehaviors(content: string, match: RegExpMatchArray): SpecExa
 function parseExamplesSection(
   content: string,
   exampleHeading: string,
-  stepsHeading: string
+  stepsHeading: string,
+  lineOffset: number = 0
 ): SpecExample[] {
   const lines = content.split("\n");
   const examples: SpecExample[] = [];
   let currentExample: SpecExample | null = null;
   let inSteps = false;
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmedLine = line.trim();
+    const lineNumber = lineOffset + i + 1;
 
     // New example
     if (trimmedLine.startsWith(exampleHeading + " ")) {
@@ -313,12 +324,13 @@ function parseExamplesSection(
         const instruction = rawInstruction.trim();
 
         if (stepType === "Act") {
-          currentExample.steps.push({ type: "act", instruction });
+          currentExample.steps.push({ type: "act", instruction, lineNumber });
         } else {
           currentExample.steps.push({
             type: "check",
             instruction,
             checkType: classifyCheck(instruction),
+            lineNumber,
           });
         }
       }
@@ -422,11 +434,24 @@ export async function executeActStep(
     const errorMessage = error instanceof Error ? error.message : String(error);
 
     const page = stagehand.context.activePage();
-    const pageSnapshot = page
-      ? await page.evaluate(() => document.documentElement.outerHTML)
-      : "";
-    const observations = await stagehand.observe();
-    const availableActions = observations.map((obs) => obs.description);
+    let pageSnapshot = "";
+    let availableActions: string[] = [];
+
+    // Wrap diagnostic calls in try/catch to prevent them from masking the original error
+    try {
+      pageSnapshot = page
+        ? await page.evaluate(() => document.documentElement.outerHTML)
+        : "";
+    } catch {
+      // Ignore page snapshot errors
+    }
+
+    try {
+      const observations = await stagehand.observe();
+      availableActions = observations.map((obs) => obs.description);
+    } catch {
+      // Ignore observe errors during error recovery
+    }
 
     return {
       success: false,
