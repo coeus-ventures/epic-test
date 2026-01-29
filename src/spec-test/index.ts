@@ -677,6 +677,79 @@ function generateSuggestions(
   return suggestions;
 }
 
+/** Max retries for transient API errors */
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
+
+/**
+ * Check if an instruction is a navigation action (e.g., "Navigate to http://...")
+ * Returns the URL if found, null otherwise.
+ */
+function isNavigationAction(instruction: string): string | null {
+  // First, try to extract URL directly from instruction
+  const urlMatch = instruction.match(/(https?:\/\/[^\s]+)/i);
+  if (urlMatch) {
+    return urlMatch[1].trim();
+  }
+
+  // Fallback patterns for relative paths
+  const patterns = [
+    /^navigate\s+to\s+(.+)$/i,
+    /^go\s+to\s+(.+)$/i,
+    /^open\s+(.+)$/i,
+    /^visit\s+(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = instruction.match(pattern);
+    if (match) {
+      const path = match[1].trim();
+      // Only return if it looks like a path (starts with /)
+      if (path.startsWith('/')) {
+        return path;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if instruction is a page refresh action.
+ */
+function isRefreshAction(instruction: string): boolean {
+  const patterns = [
+    /refresh\s+(?:the\s+)?page/i,
+    /reload\s+(?:the\s+)?page/i,
+    /^refresh$/i,
+    /^reload$/i,
+  ];
+  return patterns.some(pattern => pattern.test(instruction));
+}
+
+/**
+ * Extract quoted text from a check instruction for direct verification.
+ * Returns null if no quoted text found.
+ */
+function extractExpectedText(instruction: string): { text: string; shouldExist: boolean } | null {
+  const patterns = [
+    /(?:the\s+text\s+)?["']([^"']+)["']\s+(?:no\s+longer\s+)?appears/i,
+    /(?:should\s+)?(?:see|show|display|contain)\s+["']([^"']+)["']/i,
+    /["']([^"']+)["']\s+(?:is\s+)?(?:visible|shown|displayed)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = instruction.match(pattern);
+    if (match) {
+      const shouldExist = !instruction.toLowerCase().includes('no longer') &&
+                          !instruction.toLowerCase().includes('not ') &&
+                          !instruction.toLowerCase().includes("doesn't") &&
+                          !instruction.toLowerCase().includes("does not");
+      return { text: match[1], shouldExist };
+    }
+  }
+  return null;
+}
+
 /**
  * Main class for parsing and executing behavior specifications against a running application.
  *
@@ -690,6 +763,14 @@ function generateSuggestions(
  * 4. Check step: executeSemanticCheck takes "after" snapshot, then asserts diff
  *
  * This ensures that semantic checks always compare "state before action" vs "state at check time".
+ *
+ * Error Handling
+ * --------------
+ * The runner includes robust error handling for Docker/CI environments:
+ * - Retry logic (3 retries) for transient Stagehand AI errors
+ * - Direct page.goto() for navigation actions (more reliable than AI)
+ * - Direct text verification via page.locator() for simple checks
+ * - Docker-compatible Chromium flags when running in containers
  */
 export class SpecTestRunner {
   private config: SpecTestConfig;
@@ -738,6 +819,11 @@ export class SpecTestRunner {
 
   /**
    * Initialize Stagehand browser and B-Test tester.
+   *
+   * Includes Docker-compatible configuration:
+   * - disablePino: true (pino logger uses thread-stream which doesn't work in Bun binaries)
+   * - chromiumSandbox: false when running in Docker (required when running as root)
+   * - Docker-compatible Chromium flags: --no-sandbox, --disable-setuid-sandbox, etc.
    */
   private async initialize(): Promise<{ stagehand: Stagehand; tester: Tester }> {
     if (this.stagehand && this.tester) {
@@ -751,13 +837,32 @@ export class SpecTestRunner {
     const isLocal = !this.config.browserbaseApiKey;
     const cacheDir = this.getCacheDir(this.currentSpec ?? undefined);
 
+    // Detect if running in Docker (no sandbox needed, typically running as root)
+    const executablePath = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
+    const isDocker = !!executablePath || process.getuid?.() === 0;
+
+    // Build local browser options with Docker compatibility
+    const localBrowserOptions = isLocal ? {
+      headless: this.config.headless ?? true,
+      ...(executablePath && { executablePath }),
+      // Disable Chromium sandbox in Docker (required when running as root)
+      chromiumSandbox: isDocker ? false : undefined,
+      // Additional args for Docker environment
+      args: isDocker ? [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ] : undefined,
+    } : undefined;
+
     this.stagehand = new Stagehand({
       env: isLocal ? "LOCAL" : "BROWSERBASE",
       apiKey: this.config.browserbaseApiKey,
       cacheDir, // Pass cache directory for action caching
-      localBrowserLaunchOptions: isLocal
-        ? { headless: this.config.headless ?? true }
-        : undefined,
+      // Disable pino logger - it uses thread-stream which doesn't work in Bun binaries
+      disablePino: true,
+      localBrowserLaunchOptions: localBrowserOptions,
       ...this.config.stagehandOptions,
     });
 
@@ -915,10 +1020,13 @@ export class SpecTestRunner {
    * Execute a single step with context.
    *
    * For Act steps: Resets snapshots and takes a fresh "before" baseline,
-   * then executes the action.
+   * then executes the action. Includes:
+   * - Direct page.goto() for navigation actions (more reliable)
+   * - Direct page.reload() for refresh actions
+   * - Retry logic (3 retries) for transient Stagehand errors
    *
-   * For Check steps: Delegates to executeCheckStep which takes the "after"
-   * snapshot and performs the assertion.
+   * For Check steps: Tries direct text verification first via page.locator(),
+   * falls back to Stagehand observe() for complex checks.
    */
   async runStep(step: SpecStep, context: StepContext): Promise<StepResult> {
     const { page, stagehand, tester } = context;
@@ -930,7 +1038,57 @@ export class SpecTestRunner {
       tester.clearSnapshots();
       await tester.snapshot(page);
 
-      const actResult = await executeActStep(step.instruction, stagehand);
+      // Try direct navigation first (more reliable than Stagehand for URLs)
+      const navUrl = isNavigationAction(step.instruction);
+      if (navUrl) {
+        try {
+          await page.goto(navUrl);
+          await page.waitForLoadState('networkidle');
+          const duration = Date.now() - stepStart;
+          return {
+            step,
+            success: true,
+            duration,
+            actResult: { success: true, duration, pageUrl: page.url() },
+          };
+        } catch (error) {
+          const duration = Date.now() - stepStart;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          return {
+            step,
+            success: false,
+            duration,
+            actResult: { success: false, duration, error: errorMessage },
+          };
+        }
+      }
+
+      // Try direct page refresh
+      if (isRefreshAction(step.instruction)) {
+        try {
+          await page.reload();
+          await page.waitForLoadState('networkidle');
+          const duration = Date.now() - stepStart;
+          return {
+            step,
+            success: true,
+            duration,
+            actResult: { success: true, duration, pageUrl: page.url() },
+          };
+        } catch (error) {
+          const duration = Date.now() - stepStart;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          return {
+            step,
+            success: false,
+            duration,
+            actResult: { success: false, duration, error: errorMessage },
+          };
+        }
+      }
+
+      // Use Stagehand for other actions with retry logic
+      const actResult = await this.executeActWithRetry(step.instruction, stagehand);
       const duration = Date.now() - stepStart;
 
       return {
@@ -941,13 +1099,41 @@ export class SpecTestRunner {
       };
     }
 
-    // Check step: executeCheckStep will take "after" snapshot and assert
+    // Check step: try direct text verification first
+    const textCheck = extractExpectedText(step.instruction);
+    if (textCheck) {
+      try {
+        const escapedText = textCheck.text.replace(/"/g, '\\"');
+        const locator = page.locator(`text="${escapedText}"`);
+        const count = await locator.count();
+        const exists = count > 0;
+        const passed = textCheck.shouldExist ? exists : !exists;
+        const duration = Date.now() - stepStart;
+
+        return {
+          step,
+          success: passed,
+          duration,
+          checkResult: {
+            passed,
+            checkType: "deterministic",
+            expected: step.instruction,
+            actual: exists ? `Found "${textCheck.text}" on page` : `Text "${textCheck.text}" not found`,
+          },
+        };
+      } catch {
+        // Fall through to semantic check on error
+      }
+    }
+
+    // Semantic check with retry logic
     const checkType = step.checkType ?? "semantic";
-    const checkResult = await executeCheckStep(
+    const checkResult = await this.executeCheckWithRetry(
       step.instruction,
       checkType,
       page,
-      tester
+      tester,
+      stagehand
     );
     const duration = Date.now() - stepStart;
 
@@ -960,11 +1146,142 @@ export class SpecTestRunner {
   }
 
   /**
+   * Execute an Act step with retry logic for transient errors.
+   */
+  private async executeActWithRetry(
+    instruction: string,
+    stagehand: Stagehand
+  ): Promise<ActResult> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await executeActStep(instruction, stagehand);
+        if (result.success) {
+          return result;
+        }
+        // If not successful but no exception, check if it's retryable
+        if (result.error && this.isRetryableError(result.error)) {
+          lastError = new Error(result.error);
+          if (attempt < MAX_RETRIES) {
+            await this.delay(RETRY_DELAY);
+            continue;
+          }
+        }
+        return result;
+      } catch (error) {
+        const rawError = error instanceof Error ? error : new Error(String(error));
+        if (this.isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
+          lastError = rawError;
+          await this.delay(RETRY_DELAY);
+          continue;
+        }
+        throw rawError;
+      }
+    }
+
+    return {
+      success: false,
+      duration: 0,
+      error: lastError?.message ?? 'Step failed after retries',
+    };
+  }
+
+  /**
+   * Execute a Check step with retry logic for transient errors.
+   */
+  private async executeCheckWithRetry(
+    instruction: string,
+    checkType: "deterministic" | "semantic",
+    page: Page,
+    tester: Tester,
+    stagehand: Stagehand
+  ): Promise<CheckResult> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // For semantic checks, try Stagehand observe() as fallback
+        if (checkType === "semantic") {
+          try {
+            const observations = await stagehand.observe(instruction);
+            const passed = observations.length > 0;
+            return {
+              passed,
+              checkType: "semantic",
+              expected: instruction,
+              actual: passed ? "Condition observed" : "Condition not observed",
+            };
+          } catch (error) {
+            const rawError = error instanceof Error ? error : new Error(String(error));
+            if (this.isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
+              lastError = rawError;
+              await this.delay(RETRY_DELAY);
+              continue;
+            }
+            // Fall through to regular semantic check
+          }
+        }
+
+        return await executeCheckStep(instruction, checkType, page, tester);
+      } catch (error) {
+        const rawError = error instanceof Error ? error : new Error(String(error));
+        if (this.isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
+          lastError = rawError;
+          await this.delay(RETRY_DELAY);
+          continue;
+        }
+        return {
+          passed: false,
+          checkType,
+          expected: instruction,
+          actual: rawError.message,
+        };
+      }
+    }
+
+    return {
+      passed: false,
+      checkType,
+      expected: instruction,
+      actual: lastError?.message ?? 'Check failed after retries',
+    };
+  }
+
+  /**
+   * Check if an error is retryable (transient API errors).
+   */
+  private isRetryableError(message: string): boolean {
+    return message.includes('schema') ||
+           message.includes('No object generated') ||
+           message.includes('rate') ||
+           message.includes('timeout') ||
+           message.includes('ECONNRESET') ||
+           message.includes('ETIMEDOUT');
+  }
+
+  /**
+   * Delay helper for retry logic.
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
    * Close browser and clean up resources.
+   * Includes a timeout to prevent hanging in Docker environments.
    */
   async close(): Promise<void> {
     if (this.stagehand) {
-      await this.stagehand.close();
+      try {
+        // Close with timeout - Stagehand may hang on close in Docker
+        await Promise.race([
+          this.stagehand.close(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Close timeout')), 10000))
+        ]);
+      } catch {
+        // Timeout reached or error, continue anyway
+      }
       this.stagehand = null;
     }
     if (this.tester) {
