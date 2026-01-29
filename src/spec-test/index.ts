@@ -83,6 +83,17 @@ const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
 /**
  * Parses the Examples section from Epic Specification Format.
  *
+ * Expected format:
+ * ```markdown
+ * ## Examples
+ *
+ * ### Example Name
+ *
+ * #### Steps
+ * * Act: User action description
+ * * Check: Expected outcome
+ * ```
+ *
  * @param content - Full markdown content
  * @returns Array of SpecExample objects with name and steps
  */
@@ -107,23 +118,64 @@ export function parseExamples(content: string): SpecExample[] {
     : content.length;
 
   const examplesContent = content.slice(examplesStart, examplesEnd);
+  const lines = examplesContent.split("\n");
+
   const examples: SpecExample[] = [];
+  let currentExample: SpecExample | null = null;
+  let inSteps = false;
 
-  // Split by H3 headings to get individual examples
-  const exampleMatches = [...examplesContent.matchAll(EXAMPLE_HEADING_PATTERN)];
+  for (const line of lines) {
+    const trimmedLine = line.trim();
 
-  for (let i = 0; i < exampleMatches.length; i++) {
-    const match = exampleMatches[i];
-    const exampleName = match[1].trim();
-    const exampleStart = match.index! + match[0].length;
-    const exampleEnd = exampleMatches[i + 1]?.index ?? examplesContent.length;
-    const exampleContent = examplesContent.slice(exampleStart, exampleEnd);
-
-    // Parse steps from #### Steps section
-    const steps = parseSteps(exampleContent);
-    if (steps.length > 0) {
-      examples.push({ name: exampleName, steps });
+    // New example: ### Example Name
+    if (trimmedLine.startsWith("### ")) {
+      // Save previous example if exists
+      if (currentExample && currentExample.steps.length > 0) {
+        examples.push(currentExample);
+      }
+      currentExample = {
+        name: trimmedLine.slice(4).trim(),
+        steps: [],
+      };
+      inSteps = false;
+      continue;
     }
+
+    // Steps section: #### Steps
+    if (trimmedLine.toLowerCase() === "#### steps") {
+      inSteps = true;
+      continue;
+    }
+
+    // Another #### section ends steps
+    if (trimmedLine.startsWith("#### ") && !trimmedLine.toLowerCase().includes("steps")) {
+      inSteps = false;
+      continue;
+    }
+
+    // Parse step lines: * Act: or * Check:
+    if (inSteps && currentExample && trimmedLine.startsWith("* ")) {
+      const match = trimmedLine.match(STEP_PATTERN);
+      if (match) {
+        const [, stepType, rawInstruction] = match;
+        const instruction = rawInstruction.trim();
+
+        if (stepType === "Act") {
+          currentExample.steps.push({ type: "act", instruction });
+        } else {
+          currentExample.steps.push({
+            type: "check",
+            instruction,
+            checkType: classifyCheck(instruction),
+          });
+        }
+      }
+    }
+  }
+
+  // Don't forget the last example
+  if (currentExample && currentExample.steps.length > 0) {
+    examples.push(currentExample);
   }
 
   return examples;
