@@ -664,47 +664,172 @@ function generateSuggestions(
   step: SpecStep,
   elements: FailureContext["availableElements"]
 ): string[] {
-  const suggestions: string[] = [];
-  const errorLower = error.message.toLowerCase();
+  const errorMessage = error.message;
+  const isElementNotFound = errorMessage.includes('Element not found') ||
+                            errorMessage.includes('No object generated') ||
+                            errorMessage.includes('Could not locate') ||
+                            errorMessage.includes('schema') ||
+                            errorMessage.includes('not found') ||
+                            errorMessage.includes('no element');
+  const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('timed out');
+  const isPageStateIssue = errorMessage.includes('Unexpected page state') ||
+                            errorMessage.includes('login page') ||
+                            errorMessage.includes('session may have expired') ||
+                            errorMessage.includes('WARNING: Page appears to be');
 
-  if (errorLower.includes("not found") || errorLower.includes("no element")) {
-    suggestions.push(`Element not found for: "${step.instruction}"`);
+  // Page state issues take priority - they explain the root cause
+  if (isPageStateIssue) {
+    return [
+      'The page is in an unexpected state (likely redirected to login)',
+      'Check if the application properly persists user sessions',
+      'Verify modals and dialogs don\'t close unexpectedly on interactions',
+      'The application may have a session timeout or auth issue',
+      'Check for JavaScript errors that might cause unexpected navigation',
+    ];
+  }
 
-    const relevantElements = elements.filter((el) =>
-      el.type === "button" || el.type === "link"
-    );
-    if (relevantElements.length > 0) {
-      const names = relevantElements.map((el) => el.text || el.selector).slice(0, 5);
-      suggestions.push(`Available clickable elements: ${names.join(", ")}`);
+  if (isElementNotFound) {
+    const instructionLower = step.instruction.toLowerCase();
+
+    if (step.type === 'act') {
+      // Action step - element to interact with not found
+      if (instructionLower.includes('click')) {
+        const suggestions = [
+          'The button or clickable element was not found on the page',
+          'Verify the button exists and has the expected label',
+        ];
+        if (elements.length > 0) {
+          const names = elements.filter(el => el.type === 'button' || el.type === 'link')
+            .map(el => el.text || el.selector).slice(0, 5);
+          if (names.length > 0) {
+            suggestions.push(`Available clickable elements: ${names.join(', ')}`);
+          }
+        }
+        suggestions.push('The feature may not be implemented in the application');
+        return suggestions;
+      }
+      if (instructionLower.includes('select') ||
+          instructionLower.includes('dropdown') ||
+          instructionLower.includes('change') ||
+          instructionLower.includes('choose')) {
+        return [
+          'The dropdown or select element was not found or is not interactive',
+          'Verify the form includes this field with proper accessibility',
+          'Check if the dropdown/select needs to be opened first',
+          'The select element may use a custom component that\'s hard to automate',
+          'Consider using standard HTML select elements for better testability',
+        ];
+      }
+      if (instructionLower.includes('fill') ||
+          instructionLower.includes('type') ||
+          instructionLower.includes('enter')) {
+        return [
+          'The input field was not found on the page',
+          'Verify the form includes this field with the expected label',
+          'Check if the form or modal is visible and not hidden',
+          'The field may not be implemented in the application',
+        ];
+      }
+      return [
+        'The UI element for this action was not found',
+        'Verify the element exists with the expected label or identifier',
+        'Check if the page state is what you expect (not on wrong page)',
+        'This feature may not be implemented in the application',
+      ];
+    } else {
+      // Check step - expected content not found
+      return [
+        'The expected content or element was not found on the page',
+        'The application may not be displaying the expected data',
+        'Verify the previous action completed successfully',
+        'Check if you\'re on the correct page (URL/title in error)',
+        'This feature may not be implemented correctly',
+      ];
     }
-
-    suggestions.push("Try using more specific text or check if element exists");
   }
 
-  if (errorLower.includes("timeout")) {
-    suggestions.push("Operation timed out - the element may not be visible or page is still loading");
-    suggestions.push("Consider adding a wait step before this action");
-    suggestions.push("Check if the page has fully loaded or if there are async operations");
+  if (isTimeout) {
+    return [
+      'The operation timed out waiting for a response',
+      'The page may be slow to load or unresponsive',
+      'Check for JavaScript errors in the application',
+      'Consider if the application is properly running',
+    ];
   }
 
-  if (step.type === "check" || errorLower.includes("check") || errorLower.includes("expected")) {
-    suggestions.push(`Check failed for: "${step.instruction}"`);
-    suggestions.push("Verify the expected condition matches the current page state");
-    suggestions.push("Consider rewording the check or using a different assertion");
-  }
-
-  if (suggestions.length === 0) {
-    suggestions.push(`Step failed: "${step.instruction}"`);
-    suggestions.push(`Error: ${error.message}`);
-    suggestions.push("Review the page state and try a different approach");
-  }
-
-  return suggestions;
+  // Generic suggestions
+  return [
+    'Check if the page is fully loaded',
+    'Verify the element or feature exists in the application',
+    'Check the current page URL/title to ensure correct page state',
+    'Review the application implementation for this feature',
+  ];
 }
 
 /** Max retries for transient API errors */
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
+
+/**
+ * Get enhanced error context from the current page state.
+ * Includes page title, URL, warnings for unexpected states, and visible elements.
+ */
+async function getEnhancedErrorContext(
+  page: Page,
+  instruction: string,
+  attempt: number
+): Promise<string> {
+  let pageContext = '';
+  let pageStateWarning = '';
+  let visibleElements = '';
+
+  try {
+    const currentUrl = page.url();
+    const title = await page.title();
+    pageContext = ` Current page: "${title}" (${currentUrl}).`;
+
+    // Detect common unexpected page states
+    const lowerTitle = title.toLowerCase();
+    const lowerUrl = currentUrl.toLowerCase();
+
+    if (lowerTitle.includes('sign in') || lowerTitle.includes('login') ||
+        lowerUrl.includes('/login') || lowerUrl.includes('/signin') ||
+        lowerUrl.includes('/auth')) {
+      pageStateWarning = ' WARNING: Page appears to be a login/sign-in page - the session may have expired or the user was logged out unexpectedly.';
+    } else if (lowerTitle.includes('error') || lowerTitle.includes('404') || lowerTitle.includes('not found')) {
+      pageStateWarning = ' WARNING: Page appears to be an error page - navigation may have failed.';
+    }
+
+    // Get visible interactive elements for debugging
+    const elements = await page.evaluate(() => {
+      const interactiveSelectors = 'button, a, input, select, [role="button"], [onclick]';
+      const els = Array.from(document.querySelectorAll(interactiveSelectors));
+      return els.slice(0, 10).map(el => {
+        const tag = el.tagName.toLowerCase();
+        const text = (el.textContent || '').trim().slice(0, 30);
+        const type = el.getAttribute('type') || '';
+        const role = el.getAttribute('role') || '';
+        const placeholder = el.getAttribute('placeholder') || '';
+
+        let desc = tag;
+        if (type) desc += `[type=${type}]`;
+        if (role) desc += `[role=${role}]`;
+        if (text) desc += `: "${text}"`;
+        else if (placeholder) desc += `: "${placeholder}"`;
+
+        return desc;
+      });
+    });
+
+    if (elements.length > 0) {
+      visibleElements = ` Visible elements: [${elements.join(', ')}].`;
+    }
+  } catch {
+    // Ignore errors getting page context
+  }
+
+  return `Element not found: Could not locate element for "${instruction}".${pageContext}${pageStateWarning}${visibleElements} The UI element may not exist, have a different label, or the page state changed unexpectedly. (Attempted ${attempt}/${MAX_RETRIES} retries)`;
+}
 
 /**
  * Check if an instruction is a navigation action (e.g., "Navigate to http://...")
@@ -1113,7 +1238,7 @@ export class SpecTestRunner {
       }
 
       // Use Stagehand for other actions with retry logic
-      const actResult = await this.executeActWithRetry(step.instruction, stagehand);
+      const actResult = await this.executeActWithRetry(step.instruction, stagehand, page);
       const duration = Date.now() - stepStart;
 
       return {
@@ -1172,14 +1297,18 @@ export class SpecTestRunner {
 
   /**
    * Execute an Act step with retry logic for transient errors.
+   * Enhanced with rich error context including page state and visible elements.
    */
   private async executeActWithRetry(
     instruction: string,
-    stagehand: Stagehand
+    stagehand: Stagehand,
+    page: Page
   ): Promise<ActResult> {
     let lastError: Error | undefined;
+    let lastAttempt = 1;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      lastAttempt = attempt;
       try {
         const result = await executeActStep(instruction, stagehand);
         if (result.success) {
@@ -1193,6 +1322,11 @@ export class SpecTestRunner {
             continue;
           }
         }
+        // Not retryable or last attempt - enhance the error
+        if (result.error && (result.error.includes('schema') || result.error.includes('No object generated'))) {
+          const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
+          return { ...result, error: enhancedError };
+        }
         return result;
       } catch (error) {
         const rawError = error instanceof Error ? error : new Error(String(error));
@@ -1201,19 +1335,24 @@ export class SpecTestRunner {
           await this.delay(RETRY_DELAY);
           continue;
         }
-        throw rawError;
+        // Enhance error with context
+        const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
+        throw new Error(enhancedError);
       }
     }
 
+    // Final failure - get enhanced context
+    const enhancedError = await getEnhancedErrorContext(page, instruction, lastAttempt);
     return {
       success: false,
       duration: 0,
-      error: lastError?.message ?? 'Step failed after retries',
+      error: enhancedError,
     };
   }
 
   /**
    * Execute a Check step with retry logic for transient errors.
+   * Enhanced with rich error context including page state and visible elements.
    */
   private async executeCheckWithRetry(
     instruction: string,
@@ -1223,19 +1362,31 @@ export class SpecTestRunner {
     stagehand: Stagehand
   ): Promise<CheckResult> {
     let lastError: Error | undefined;
+    let lastAttempt = 1;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      lastAttempt = attempt;
       try {
         // For semantic checks, try Stagehand observe() as fallback
         if (checkType === "semantic") {
           try {
             const observations = await stagehand.observe(instruction);
             const passed = observations.length > 0;
+            if (passed) {
+              return {
+                passed: true,
+                checkType: "semantic",
+                expected: instruction,
+                actual: "Condition observed",
+              };
+            }
+            // Not passed - get enhanced context for better error message
+            const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
             return {
-              passed,
+              passed: false,
               checkType: "semantic",
               expected: instruction,
-              actual: passed ? "Condition observed" : "Condition not observed",
+              actual: enhancedError,
             };
           } catch (error) {
             const rawError = error instanceof Error ? error : new Error(String(error));
@@ -1244,7 +1395,14 @@ export class SpecTestRunner {
               await this.delay(RETRY_DELAY);
               continue;
             }
-            // Fall through to regular semantic check
+            // Get enhanced error context for schema/AI errors
+            const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
+            return {
+              passed: false,
+              checkType: "semantic",
+              expected: instruction,
+              actual: enhancedError,
+            };
           }
         }
 
@@ -1256,20 +1414,24 @@ export class SpecTestRunner {
           await this.delay(RETRY_DELAY);
           continue;
         }
+        // Get enhanced error context
+        const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
         return {
           passed: false,
           checkType,
           expected: instruction,
-          actual: rawError.message,
+          actual: enhancedError,
         };
       }
     }
 
+    // Final failure after all retries - get enhanced context
+    const enhancedError = await getEnhancedErrorContext(page, instruction, lastAttempt);
     return {
       passed: false,
       checkType,
       expected: instruction,
-      actual: lastError?.message ?? 'Check failed after retries',
+      actual: enhancedError,
     };
   }
 
