@@ -2107,18 +2107,18 @@ export class SpecTestRunner {
           try { sessionStorage.clear(); } catch {}
         }, shouldClearLocalStorage);
 
-        // Force page reload after clearing storage to reset SPA state.
-        // Without this, React apps may keep auth state in memory even after
-        // localStorage is cleared, causing the dashboard to persist.
+        // Force complete page reset by navigating to blank page first.
+        // This ensures React apps completely unmount and lose their in-memory state.
+        // Without this, SPAs may keep auth state in memory even after localStorage is cleared.
         if (shouldClearLocalStorage) {
-          await page.reload({ waitUntil: 'domcontentloaded' });
+          await page.goto('about:blank');
         }
       } catch {
         // Ignore errors clearing state - page may not be ready yet
       }
 
       // Navigate to base URL (fresh start for each example)
-      await page.goto(this.config.baseUrl, { waitUntil: 'domcontentloaded' });
+      await page.goto(this.config.baseUrl, { waitUntil: 'networkidle' });
 
       // Take initial snapshot - establishes first "before" baseline
       await tester.snapshot(page);
