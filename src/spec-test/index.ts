@@ -1116,6 +1116,16 @@ export async function verifyBehaviorWithDependencies(
 /** Default timeout per behavior in milliseconds (2 minutes) */
 const DEFAULT_BEHAVIOR_TIMEOUT_MS = 120_000;
 
+/** Auth behavior IDs that get special sequential handling */
+const AUTH_BEHAVIOR_IDS = ['sign-up', 'sign-in', 'invalid-sign-in', 'sign-out'];
+
+/**
+ * Check if a behavior ID is an auth behavior.
+ */
+function isAuthBehavior(behaviorId: string): boolean {
+  return AUTH_BEHAVIOR_IDS.includes(behaviorId.toLowerCase());
+}
+
 /**
  * Wrap a promise with a timeout.
  * @param promise - Promise to wrap
@@ -1129,6 +1139,167 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
       setTimeout(() => reject(new Error(timeoutError)), ms)
     ),
   ]);
+}
+
+/**
+ * Execute a single behavior directly (no dependency chain).
+ * Used for the special auth flow where behaviors run in a specific sequence.
+ */
+async function executeBehaviorDirectly(
+  behavior: import('./types').HarborBehavior,
+  runner: any,
+  credentialTracker: CredentialTracker,
+  clearLocalStorage: boolean = true
+): Promise<import('./types').BehaviorContext> {
+  const startTime = Date.now();
+
+  const example = behavior.examples[0];
+  if (!example) {
+    return {
+      behaviorId: behavior.id,
+      behaviorName: behavior.title,
+      status: 'fail',
+      error: `No examples found for behavior: ${behavior.title}`,
+      duration: Date.now() - startTime
+    };
+  }
+
+  // Process steps with credential handling
+  const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker);
+
+  // Log credential state for diagnostics
+  const creds = credentialTracker.getCredentials();
+  console.log(`Auth flow [${behavior.id}]: email=${creds.email ?? '(none)'}, password=${creds.password ?? '(none)'}`);
+
+  const exampleToRun = { ...example, steps: processedSteps };
+
+  try {
+    const result = await runner.runExample(exampleToRun, { clearLocalStorage });
+
+    // Capture credentials if this is Sign Up
+    if (behavior.id.includes('sign-up') || behavior.id.includes('signup')) {
+      for (const step of processedSteps) {
+        if (step.type === 'act') {
+          credentialTracker.captureFromStep(step.instruction);
+        }
+      }
+    }
+
+    if (!result.success) {
+      return {
+        behaviorId: behavior.id,
+        behaviorName: behavior.title,
+        status: 'fail',
+        error: result.failedAt?.context.error,
+        duration: result.duration
+      };
+    }
+
+    return {
+      behaviorId: behavior.id,
+      behaviorName: behavior.title,
+      status: 'pass',
+      duration: result.duration
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      behaviorId: behavior.id,
+      behaviorName: behavior.title,
+      status: 'fail',
+      error: `Runner crash: ${errorMessage}`,
+      duration: Date.now() - startTime
+    };
+  }
+}
+
+/**
+ * Run auth behaviors in a special sequence: Sign Up → Sign Out → Invalid Sign In → Sign In
+ *
+ * This flow tests all auth behaviors efficiently:
+ * 1. Sign Up - creates account and signs in
+ * 2. Sign Out - signs out (requires being signed in)
+ * 3. Invalid Sign In - tests wrong credentials (requires being signed out)
+ * 4. Sign In - tests correct credentials (requires being signed out)
+ *
+ * Credentials from Sign Up are preserved and injected into Sign In.
+ */
+async function runAuthBehaviorsSequence(
+  allBehaviors: Map<string, import('./types').HarborBehavior>,
+  context: VerificationContext,
+  credentialTracker: CredentialTracker,
+  runner: any,
+  behaviorTimeoutMs: number
+): Promise<import('./types').BehaviorContext[]> {
+  const results: import('./types').BehaviorContext[] = [];
+
+  // Define the auth flow order
+  const authOrder = ['sign-up', 'sign-out', 'invalid-sign-in', 'sign-in'];
+
+  // Get behaviors in order (skip if not present)
+  const authBehaviors: import('./types').HarborBehavior[] = [];
+  for (const id of authOrder) {
+    const behavior = allBehaviors.get(id);
+    if (behavior) {
+      authBehaviors.push(behavior);
+    }
+  }
+
+  if (authBehaviors.length === 0) {
+    return results;
+  }
+
+  console.log(`\nRunning auth behaviors in sequence: ${authBehaviors.map(b => b.title).join(' → ')}\n`);
+
+  for (let i = 0; i < authBehaviors.length; i++) {
+    const behavior = authBehaviors[i];
+    const behaviorStart = Date.now();
+
+    // Only clear localStorage for the first behavior (Sign Up)
+    const clearLocalStorage = i === 0;
+
+    // Check if a previous auth behavior failed
+    if (i > 0) {
+      const signUpResult = context.getResult('sign-up');
+      if (signUpResult && signUpResult.status !== 'pass') {
+        const failResult: import('./types').BehaviorContext = {
+          behaviorId: behavior.id,
+          behaviorName: behavior.title,
+          status: 'dependency_failed',
+          failedDependency: 'Sign Up',
+          duration: 0
+        };
+        context.markResult(behavior.id, failResult);
+        results.push(failResult);
+        continue;
+      }
+    }
+
+    try {
+      const result = await withTimeout(
+        executeBehaviorDirectly(behavior, runner, credentialTracker, clearLocalStorage),
+        behaviorTimeoutMs,
+        `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
+      );
+
+      context.markResult(behavior.id, result);
+      results.push(result);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isTimeout = errorMessage.includes('timed out');
+      const failResult: import('./types').BehaviorContext = {
+        behaviorId: behavior.id,
+        behaviorName: behavior.title,
+        status: 'fail',
+        error: isTimeout ? errorMessage : `Unexpected error: ${errorMessage}`,
+        duration: Date.now() - behaviorStart
+      };
+      context.markResult(behavior.id, failResult);
+      results.push(failResult);
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -1154,9 +1325,24 @@ export async function verifyAllBehaviors(
   const context = new VerificationContext();
   const credentialTracker = new CredentialTracker();
 
-  // 3. Verify each behavior with full dependency chain
-  const results: import('./types').BehaviorContext[] = [];
+  // 3. Run auth behaviors first in special sequence
+  // Auth flow: Sign Up → Sign Out → Invalid Sign In → Sign In
+  const authResults = await runAuthBehaviorsSequence(
+    allBehaviors,
+    context,
+    credentialTracker,
+    runner,
+    behaviorTimeoutMs
+  );
+
+  // 4. Verify non-auth behaviors with full dependency chain
+  const nonAuthResults: import('./types').BehaviorContext[] = [];
   for (const behavior of allBehaviors.values()) {
+    // Skip auth behaviors (already handled)
+    if (isAuthBehavior(behavior.id)) {
+      continue;
+    }
+
     // Reset credentials for each behavior chain
     credentialTracker.reset();
 
@@ -1175,7 +1361,7 @@ export async function verifyAllBehaviors(
       );
 
       context.markResult(behavior.id, result);
-      results.push(result);
+      nonAuthResults.push(result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const isTimeout = errorMessage.includes('timed out');
@@ -1187,11 +1373,14 @@ export async function verifyAllBehaviors(
         duration: Date.now() - behaviorStart,
       };
       context.markResult(behavior.id, failResult);
-      results.push(failResult);
+      nonAuthResults.push(failResult);
     }
   }
 
-  // 4. Create summary
+  // 5. Combine results (auth first, then non-auth)
+  const results = [...authResults, ...nonAuthResults];
+
+  // 6. Create summary
   const duration = Date.now() - startTime;
   return createVerificationSummary(results, duration);
 }
