@@ -2463,23 +2463,22 @@ export class SpecTestRunner {
       // Cast Stagehand's Page to Playwright's Page for type compatibility
       const page = stagehandPage as unknown as Page;
 
-      // Navigate to target URL first to ensure we're on the correct domain
+      // Determine target URL for navigation
       // For chain steps, navigate directly to the behavior's page path
       const targetUrl = options?.navigateToPath
         ? `${this.config.baseUrl.replace(/\/$/, '')}${options.navigateToPath}`
         : this.config.baseUrl;
-      await page.goto(targetUrl);
 
-      // Clear browser state AFTER navigating to ensure we're on the right domain.
+      // Clear browser state when starting a fresh chain (clearLocalStorage is true).
       // This prevents session carry-over between chains (e.g., auth flow leaving
       // user logged in, causing Sign Up in next chain to fail).
-      //
-      // Cookies and localStorage are only cleared when clearLocalStorage is true.
-      // Within a dependency chain or auth flow, subsequent steps preserve cookies/localStorage
-      // so the session (and app data in SPAs) persists across steps.
       const shouldClearSession = options?.clearLocalStorage !== false;
       try {
         if (shouldClearSession) {
+          // Navigate to baseUrl first to ensure we're on the correct domain for clearing
+          await page.goto(this.config.baseUrl);
+
+          // Clear all browser storage
           const browserContext = page.context();
           await browserContext.clearCookies();
           await page.evaluate(() => {
@@ -2487,14 +2486,19 @@ export class SpecTestRunner {
             try { sessionStorage.clear(); } catch {}
           });
 
-          // Reload to ensure the app picks up the cleared state.
-          // This is critical for SPAs that read auth tokens on initial load.
-          await page.reload();
+          // Navigate again to force a fresh load with cleared state.
+          // This is more robust than reload because SPAs may redirect on reload
+          // before the cleared state is fully processed.
+          await page.goto(targetUrl);
+          await page.waitForLoadState('networkidle');
+        } else {
+          // No clearing needed, just navigate
+          await page.goto(targetUrl);
           await page.waitForLoadState('networkidle');
         }
       } catch (e) {
-        // Log errors clearing state instead of silently ignoring
-        console.warn(`Warning: Failed to clear browser state: ${e instanceof Error ? e.message : String(e)}`);
+        // Log errors but continue - navigation may still have succeeded
+        console.warn(`Warning: Session clear/navigation issue: ${e instanceof Error ? e.message : String(e)}`);
       }
 
       // Take initial snapshot - establishes first "before" baseline
