@@ -2472,6 +2472,9 @@ export class SpecTestRunner {
       // Clear browser state when starting a fresh chain (clearLocalStorage is true).
       // This prevents session carry-over between chains (e.g., auth flow leaving
       // user logged in, causing Sign Up in next chain to fail).
+      //
+      // When NOT clearing (e.g., Sign Out after Sign Up), keep the page as-is.
+      // The behavior's steps will handle any navigation needed.
       const shouldClearSession = options?.clearLocalStorage !== false;
       try {
         if (shouldClearSession) {
@@ -2486,16 +2489,13 @@ export class SpecTestRunner {
             try { sessionStorage.clear(); } catch {}
           });
 
-          // Navigate again to force a fresh load with cleared state.
-          // This is more robust than reload because SPAs may redirect on reload
-          // before the cleared state is fully processed.
-          await page.goto(targetUrl);
-          await page.waitForLoadState('networkidle');
-        } else {
-          // No clearing needed, just navigate
+          // Navigate to targetUrl to force a fresh load with cleared state
           await page.goto(targetUrl);
           await page.waitForLoadState('networkidle');
         }
+        // When NOT clearing session, don't navigate - keep current page state.
+        // This preserves auth state between auth flow steps (e.g., Sign Up → Sign Out).
+        // The behavior's steps include navigation if needed.
       } catch (e) {
         // Log errors but continue - navigation may still have succeeded
         console.warn(`Warning: Session clear/navigation issue: ${e instanceof Error ? e.message : String(e)}`);
