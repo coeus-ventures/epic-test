@@ -2463,35 +2463,39 @@ export class SpecTestRunner {
       // Cast Stagehand's Page to Playwright's Page for type compatibility
       const page = stagehandPage as unknown as Page;
 
-      // Clear browser state so each example starts with a fresh session.
-      // This prevents session carry-over between chain steps (e.g., Sign Up
-      // logging the user in, which would cause Sign In to land on the tasks
-      // page instead of the login page).
-      //
-      // localStorage is only cleared when clearLocalStorage is true (default).
-      // Within a dependency chain, subsequent steps preserve localStorage to
-      // keep app data (e.g., user accounts in SPA apps) created by earlier steps.
-      const shouldClearLocalStorage = options?.clearLocalStorage !== false;
-      try {
-        const browserContext = page.context();
-        await browserContext.clearCookies();
-        await page.evaluate((clearLS) => {
-          if (clearLS) {
-            try { localStorage.clear(); } catch {}
-          }
-          try { sessionStorage.clear(); } catch {}
-        }, shouldClearLocalStorage);
-      } catch {
-        // Ignore errors clearing state - page may not be ready yet
-      }
-
-      // Navigate to target URL
+      // Navigate to target URL first to ensure we're on the correct domain
       // For chain steps, navigate directly to the behavior's page path
-      // This avoids redundant navigation through the login flow
       const targetUrl = options?.navigateToPath
         ? `${this.config.baseUrl.replace(/\/$/, '')}${options.navigateToPath}`
         : this.config.baseUrl;
       await page.goto(targetUrl);
+
+      // Clear browser state AFTER navigating to ensure we're on the right domain.
+      // This prevents session carry-over between chains (e.g., auth flow leaving
+      // user logged in, causing Sign Up in next chain to fail).
+      //
+      // Cookies and localStorage are only cleared when clearLocalStorage is true.
+      // Within a dependency chain or auth flow, subsequent steps preserve cookies/localStorage
+      // so the session (and app data in SPAs) persists across steps.
+      const shouldClearSession = options?.clearLocalStorage !== false;
+      try {
+        if (shouldClearSession) {
+          const browserContext = page.context();
+          await browserContext.clearCookies();
+          await page.evaluate(() => {
+            try { localStorage.clear(); } catch {}
+            try { sessionStorage.clear(); } catch {}
+          });
+
+          // Reload to ensure the app picks up the cleared state.
+          // This is critical for SPAs that read auth tokens on initial load.
+          await page.reload();
+          await page.waitForLoadState('networkidle');
+        }
+      } catch (e) {
+        // Log errors clearing state instead of silently ignoring
+        console.warn(`Warning: Failed to clear browser state: ${e instanceof Error ? e.message : String(e)}`);
+      }
 
       // Take initial snapshot - establishes first "before" baseline
       await tester.snapshot(page);
