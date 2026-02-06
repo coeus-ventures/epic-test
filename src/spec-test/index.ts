@@ -2499,11 +2499,15 @@ export class SpecTestRunner {
           await page.goto(targetUrl);
           await page.waitForLoadState('networkidle');
         } else if (options?.navigateToPath) {
-          // Not clearing session, but need to navigate to a specific page path
-          // This is for non-first chain steps that need to go to a different page
-          console.log(`[runExample] Navigating to ${targetUrl} (preserving session)`);
-          await page.goto(targetUrl);
-          await page.waitForLoadState('networkidle');
+          // Not clearing session, but a page path was specified.
+          // DON'T use page.goto() as it causes a full page reload which loses
+          // in-memory auth state (React state, etc.). SPAs that store auth in
+          // memory will lose the session.
+          //
+          // Instead, we keep the current page and let the stripped steps run.
+          // After Sign Up, the user should already be on the main app page.
+          // The stripped steps will verify the expected state.
+          console.log(`[runExample] Page path ${options.navigateToPath} specified but NOT navigating (would lose session). Keeping current page.`);
         } else {
           // Not clearing session and no specific path - keep page as-is
           // This is for auth flow steps (Sign Out, Invalid Sign In, Sign In)
