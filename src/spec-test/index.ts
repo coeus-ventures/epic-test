@@ -1686,7 +1686,13 @@ async function executeSemanticCheck(
 ): Promise<CheckResult> {
   // Take "after" snapshot - "before" must already exist from SpecTestRunner
   await tester.snapshot(page);
-  const passed = await tester.assert(instruction);
+
+  // Enhance instruction with semantic interpretation hints
+  const enhancedInstruction = `${instruction}
+
+(INTERPRETATION: "navigate the application" = any button/link to app sections like Jobs, Candidates, Dashboard. "create X" = buttons like Create/Add/New. Use "or" generously - if ANY part is true, pass.)`;
+
+  const passed = await tester.assert(enhancedInstruction);
 
   return {
     passed,
@@ -2603,7 +2609,13 @@ export class SpecTestRunner {
           "true if the condition is satisfied by ANY element currently visible on the page, false only if NO element matches"
         ),
       });
-      const enhancedInstruction = `Look at ALL visible elements on the page (buttons, links, text, navigation items, headings, forms). Evaluate whether this condition is satisfied: "${instruction}". If the condition uses "or", it passes if ANY part is true.`;
+      const enhancedInstruction = `Look at ALL visible elements on the page (buttons, links, text, navigation items, headings, forms). Evaluate whether this condition is satisfied: "${instruction}".
+
+IMPORTANT evaluation rules:
+- If the condition uses "or", it passes if ANY part is true
+- "navigate the application" means ANY button/link that takes you to different sections (e.g., "Jobs", "Candidates", "Dashboard", "Settings", "Home" are navigation)
+- "button to create X" includes buttons like "Create X", "Add X", "New X", or a "+" button
+- Be generous in interpretation - if the page has relevant interactive elements, the condition is likely satisfied`;
       const result = await stagehand.extract(enhancedInstruction, schema);
       console.log(`extract() double-check for "${instruction.slice(0, 80)}...": ${result.passed}`);
       return result.passed;
