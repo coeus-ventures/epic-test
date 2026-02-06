@@ -1,6 +1,7 @@
 import { readFile } from "fs/promises";
 import { existsSync, rmSync } from "fs";
 import path from "path";
+import { z } from "zod";
 import type { Page } from "playwright";
 import type { Stagehand } from "@browserbasehq/stagehand";
 import type { Tester } from "../b-test";
@@ -18,6 +19,10 @@ export type {
   CheckResult,
   FailureContext,
   StepContext,
+  BehaviorContext,
+  BehaviorDependency,
+  ChainStep,
+  VerificationSummary,
 } from "./types";
 
 import type {
@@ -77,7 +82,7 @@ const NAME_PATTERN = /^#\s+(.+)$/m;
 /** Regex pattern to extract directory from Directory: line. */
 const DIRECTORY_PATTERN = /^Directory:\s*`([^`]+)`/m;
 
-/** Regex pattern to match example headings (H3 in Examples section). */
+/** Regex pattern to match example/scenario headings (H3 in Examples/Scenarios section). */
 const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
 
 /**
@@ -85,10 +90,10 @@ const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
  *
  * Supports two formats:
  *
- * 1. Epic Format (## Examples):
+ * 1. Epic Format (## Scenarios / ## Examples):
  * ```markdown
- * ## Examples
- * ### Example Name
+ * ## Scenarios
+ * ### Scenario Name
  * #### Steps
  * * Act: User action
  * * Check: Expected outcome
@@ -102,12 +107,12 @@ const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
  * * Act: User action
  * * Check: Expected outcome
  * ```
- * Or with nested examples:
+ * Or with nested scenarios:
  * ```markdown
  * ## Behaviors
  * ### Behavior Name
- * #### Examples
- * ##### Example Name
+ * #### Scenarios
+ * ##### Scenario Name
  * ###### Steps
  * * Act: User action
  * * Check: Expected outcome
@@ -117,8 +122,8 @@ const EXAMPLE_HEADING_PATTERN = /^###\s+(.+)$/gm;
  * @returns Array of SpecExample objects with name and steps
  */
 export function parseExamples(content: string): SpecExample[] {
-  // Try Epic format first: ## Examples
-  const examplesMatch = content.match(/^## Examples\s*$/m);
+  // Try Epic format first: ## Scenarios or ## Examples
+  const examplesMatch = content.match(/^## (?:Scenarios|Examples)\s*$/m);
   if (examplesMatch) {
     return parseEpicExamples(content, examplesMatch);
   }
@@ -138,7 +143,7 @@ export function parseExamples(content: string): SpecExample[] {
 }
 
 /**
- * Parse Epic format: ## Examples -> ### Example -> #### Steps
+ * Parse Epic format: ## Scenarios/Examples -> ### Scenario -> #### Steps
  */
 function parseEpicExamples(content: string, match: RegExpMatchArray): SpecExample[] {
   const examplesStart = match.index! + match[0].length;
@@ -209,8 +214,8 @@ function parseHarborBehaviors(content: string, match: RegExpMatchArray): SpecExa
       continue;
     }
 
-    // #### Examples (full format - behavior has nested examples)
-    if (/^#### Examples/i.test(trimmedLine)) {
+    // #### Scenarios or #### Examples (full format - behavior has nested scenarios)
+    if (/^#### (?:Scenarios|Examples)/i.test(trimmedLine)) {
       inExamplesSection = true;
       collectingSteps = false;
       continue;
@@ -270,6 +275,924 @@ function parseHarborBehaviors(content: string, match: RegExpMatchArray): SpecExa
   }
 
   return examples;
+}
+
+/**
+ * Helper function to convert title to slug (same as Python slugify)
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Parse Harbor format with full behavior definitions including dependencies.
+ * Returns a Map of behavior ID to HarborBehavior for efficient chain building.
+ */
+export function parseHarborBehaviorsWithDependencies(
+  content: string
+): Map<string, import('./types').HarborBehavior> {
+  const behaviorsMatch = content.match(/^## Behaviors/im);
+  if (!behaviorsMatch) {
+    return new Map();
+  }
+
+  const behaviorsStart = behaviorsMatch.index! + behaviorsMatch[0].length;
+  const nextH2Match = content.slice(behaviorsStart).match(/^## [^#]/m);
+  const behaviorsEnd = nextH2Match
+    ? behaviorsStart + nextH2Match.index!
+    : content.length;
+
+  const behaviorsContent = content.slice(behaviorsStart, behaviorsEnd);
+  const lines = behaviorsContent.split("\n");
+
+  const lineOffset = content.slice(0, behaviorsStart).split('\n').length;
+
+  const behaviors = new Map<string, import('./types').HarborBehavior>();
+  let currentBehavior: import('./types').HarborBehavior | null = null;
+  let currentExample: SpecExample | null = null;
+  let collectingSteps = false;
+  let collectingDependencies = false;
+  let inExamplesSection = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+    const lineNumber = lineOffset + i + 1;
+
+    // New behavior: ### Behavior Name
+    if (trimmedLine.startsWith("### ") && !trimmedLine.startsWith("#### ")) {
+      // Save previous behavior
+      if (currentBehavior && currentExample && currentExample.steps.length > 0) {
+        currentBehavior.examples.push(currentExample);
+      }
+      if (currentBehavior) {
+        behaviors.set(currentBehavior.id, currentBehavior);
+      }
+
+      const title = trimmedLine.slice(4).trim();
+      currentBehavior = {
+        id: slugify(title),
+        title,
+        description: '',
+        dependencies: [],
+        examples: [],
+      };
+      currentExample = null;
+      collectingSteps = false;
+      collectingDependencies = false;
+      inExamplesSection = false;
+      continue;
+    }
+
+    if (!currentBehavior) continue;
+
+    // #### Dependencies section
+    if (/^#### Dependencies/i.test(trimmedLine) && !trimmedLine.startsWith("#####")) {
+      collectingDependencies = true;
+      collectingSteps = false;
+      inExamplesSection = false;
+      continue;
+    }
+
+    // Parse dependency lines: "1. Behavior Title" or "1. Behavior Title: Scenario Name"
+    if (collectingDependencies && trimmedLine) {
+      const depMatch = trimmedLine.match(/^\d+\.\s+(.+)$/);
+      if (depMatch) {
+        const depText = depMatch[1].trim();
+        const colonIndex = depText.indexOf(':');
+        if (colonIndex !== -1) {
+          const behaviorTitle = depText.slice(0, colonIndex).trim();
+          const scenarioName = depText.slice(colonIndex + 1).trim();
+          currentBehavior.dependencies.push({
+            behaviorId: slugify(behaviorTitle),
+            scenarioName: scenarioName || undefined,
+          });
+        } else {
+          currentBehavior.dependencies.push({
+            behaviorId: slugify(depText),
+          });
+        }
+        continue;
+      }
+    }
+
+    // #### Steps (simple format - behavior has direct steps)
+    if (/^#### Steps/i.test(trimmedLine) && !trimmedLine.startsWith("#####")) {
+      collectingDependencies = false;
+      if (currentExample && currentExample.steps.length > 0) {
+        currentBehavior.examples.push(currentExample);
+      }
+      const nameMatch = trimmedLine.match(/^#### Steps\s*(?:\(([^)]+)\))?/i);
+      const exampleName = nameMatch?.[1]?.trim() || currentBehavior.title;
+      currentExample = { name: exampleName, steps: [] };
+      collectingSteps = true;
+      inExamplesSection = false;
+      continue;
+    }
+
+    // #### Scenarios or #### Examples (full format - behavior has nested scenarios)
+    if (/^#### (?:Scenarios|Examples)/i.test(trimmedLine)) {
+      collectingDependencies = false;
+      inExamplesSection = true;
+      collectingSteps = false;
+      continue;
+    }
+
+    // Other #### sections end dependency and step collection
+    if (trimmedLine.startsWith("#### ") && !trimmedLine.startsWith("#####")) {
+      collectingDependencies = false;
+      if (currentExample && currentExample.steps.length > 0) {
+        currentBehavior.examples.push(currentExample);
+        currentExample = null;
+      }
+      collectingSteps = false;
+      inExamplesSection = false;
+      continue;
+    }
+
+    // ##### Example Name (inside #### Examples section)
+    if (inExamplesSection && trimmedLine.startsWith("##### ") && !trimmedLine.startsWith("######")) {
+      if (currentExample && currentExample.steps.length > 0) {
+        currentBehavior.examples.push(currentExample);
+      }
+      currentExample = { name: trimmedLine.slice(6).trim(), steps: [] };
+      collectingSteps = false;
+      continue;
+    }
+
+    // ###### Steps (inside example)
+    if (/^###### Steps/i.test(trimmedLine)) {
+      collectingSteps = true;
+      continue;
+    }
+
+    // Parse step lines
+    if (collectingSteps && currentExample && trimmedLine.startsWith("* ")) {
+      const stepMatch = trimmedLine.match(STEP_PATTERN);
+      if (stepMatch) {
+        const [, stepType, rawInstruction] = stepMatch;
+        const instruction = rawInstruction.trim();
+
+        if (stepType === "Act") {
+          currentExample.steps.push({ type: "act", instruction, lineNumber });
+        } else {
+          currentExample.steps.push({
+            type: "check",
+            instruction,
+            checkType: classifyCheck(instruction),
+            lineNumber,
+          });
+        }
+      }
+    }
+
+    // Collect description (before any H4 section)
+    if (!collectingDependencies && !collectingSteps && !inExamplesSection &&
+        !trimmedLine.startsWith("#") && trimmedLine && !currentBehavior.description) {
+      currentBehavior.description = trimmedLine;
+    }
+  }
+
+  // Save last behavior
+  if (currentBehavior && currentExample && currentExample.steps.length > 0) {
+    currentBehavior.examples.push(currentExample);
+  }
+  if (currentBehavior) {
+    behaviors.set(currentBehavior.id, currentBehavior);
+  }
+
+  return behaviors;
+}
+
+/**
+ * Tracks behavior verification results to enable dependency-aware testing.
+ *
+ * Features:
+ * - Remembers which behaviors passed/failed
+ * - Determines if behaviors should be skipped due to failed dependencies
+ * - Provides clear failure attribution
+ *
+ * Usage:
+ * ```typescript
+ * const context = new VerificationContext();
+ *
+ * // Mark a behavior result
+ * context.markResult('sign-up', {
+ *   behaviorId: 'sign-up',
+ *   behaviorName: 'Sign Up',
+ *   status: 'pass',
+ *   duration: 5000
+ * });
+ *
+ * // Check if dependent behavior should skip
+ * const { skip, reason } = context.shouldSkip(['sign-up', 'sign-in']);
+ * if (skip) {
+ *   console.log(`Skipping because: ${reason}`);
+ * }
+ * ```
+ */
+export class VerificationContext {
+  private results: Map<string, import('./types').BehaviorContext>;
+
+  constructor() {
+    this.results = new Map();
+  }
+
+  /**
+   * Mark a behavior verification result.
+   *
+   * @param behaviorId - Unique behavior identifier
+   * @param result - Verification result context
+   */
+  markResult(behaviorId: string, result: import('./types').BehaviorContext): void {
+    this.results.set(behaviorId, result);
+  }
+
+  /**
+   * Get the result for a specific behavior.
+   *
+   * @param behaviorId - Behavior identifier to look up
+   * @returns The behavior context if found, undefined otherwise
+   */
+  getResult(behaviorId: string): import('./types').BehaviorContext | undefined {
+    return this.results.get(behaviorId);
+  }
+
+  /**
+   * Check if a behavior should be skipped due to failed dependencies.
+   *
+   * @param dependencies - Array of behavior IDs this behavior depends on
+   * @returns Object with skip flag and optional reason
+   */
+  shouldSkip(dependencies: string[]): { skip: boolean; reason?: string } {
+    for (const depId of dependencies) {
+      const depResult = this.results.get(depId);
+
+      // If dependency hasn't been tested yet, don't skip
+      if (!depResult) {
+        continue;
+      }
+
+      // If dependency didn't pass, skip this behavior
+      if (depResult.status !== 'pass') {
+        return {
+          skip: true,
+          reason: `Dependency "${depResult.behaviorName}" failed`
+        };
+      }
+    }
+
+    return { skip: false };
+  }
+
+  /**
+   * Check if a specific behavior passed verification.
+   *
+   * @param behaviorId - Behavior identifier to check
+   * @returns True if behavior passed, false otherwise
+   */
+  hasPassed(behaviorId: string): boolean {
+    const result = this.results.get(behaviorId);
+    return result?.status === 'pass';
+  }
+
+  /**
+   * Get all tracked results.
+   * Useful for generating summaries.
+   *
+   * @returns Map of all behavior results
+   */
+  getAllResults(): Map<string, import('./types').BehaviorContext> {
+    return new Map(this.results);
+  }
+
+  /**
+   * Clear all tracked results.
+   * Useful for starting a fresh verification run.
+   */
+  clear(): void {
+    this.results.clear();
+  }
+
+  /**
+   * Get count of behaviors by status.
+   *
+   * @returns Object with counts for each status
+   */
+  getStatusCounts(): { pass: number; fail: number; dependency_failed: number } {
+    const counts = { pass: 0, fail: 0, dependency_failed: 0 };
+
+    for (const result of this.results.values()) {
+      counts[result.status]++;
+    }
+
+    return counts;
+  }
+}
+
+/**
+ * Tracks credentials created during Sign Up for reuse in Sign In.
+ *
+ * Usage:
+ * ```typescript
+ * const tracker = new CredentialTracker();
+ *
+ * // During Sign Up execution
+ * tracker.captureFromStep('Type "newuser@tasks.com" into the email input field');
+ * // Captures: email = "newuser@tasks.com"
+ *
+ * tracker.captureFromStep('Type "password123" into the password input field');
+ * // Captures: password = "password123"
+ *
+ * // During Sign In execution
+ * const updatedStep = tracker.injectIntoStep('Type "user@tasks.com" into the email input field');
+ * // Returns: 'Type "newuser@tasks.com" into the email input field'
+ *
+ * // After behavior chain completes
+ * tracker.reset();
+ * ```
+ */
+export class CredentialTracker {
+  private credentials: { email: string | null; password: string | null };
+  private executionCounter: number;
+
+  constructor() {
+    this.credentials = { email: null, password: null };
+    this.executionCounter = 0;
+  }
+
+  /**
+   * Generate a unique email variant to avoid duplicate registration.
+   * Appends a numeric suffix before the @ symbol.
+   *
+   * @param email - Base email address
+   * @returns Unique email variant (e.g., "user_3@example.com")
+   */
+  uniquifyEmail(email: string): string {
+    this.executionCounter++;
+    const atIndex = email.indexOf('@');
+    if (atIndex === -1) return email;
+    return `${email.slice(0, atIndex)}_${this.executionCounter}${email.slice(atIndex)}`;
+  }
+
+  /**
+   * Capture credentials from a Type step instruction.
+   * Detects email and password fields, extracts the typed value.
+   *
+   * @param instruction - Act step instruction (e.g., 'Type "user@test.com" into the email input field')
+   */
+  captureFromStep(instruction: string): void {
+    // Pattern: Type "value" into the [field descriptor]
+    // Match both single and double quotes
+    const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
+    const match = instruction.match(typePattern);
+
+    if (!match) return;
+
+    const value = match[1].trim();
+    const fieldDescriptor = match[2].toLowerCase();
+
+    // Detect email fields
+    if (fieldDescriptor.includes('email')) {
+      this.credentials.email = value;
+      return;
+    }
+
+    // Detect password fields
+    if (fieldDescriptor.includes('password')) {
+      this.credentials.password = value;
+      return;
+    }
+  }
+
+  /**
+   * Inject captured credentials into a Sign In step.
+   * Replaces hardcoded email/password values with captured ones.
+   *
+   * @param instruction - Act step instruction with hardcoded credentials
+   * @returns Modified instruction with captured credentials, or original if no match
+   */
+  injectIntoStep(instruction: string): string {
+    // Pattern: Type "value" into the [field descriptor]
+    const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
+    const match = instruction.match(typePattern);
+
+    if (!match) return instruction;
+
+    const fieldDescriptor = match[2].toLowerCase();
+    const originalQuote = instruction.includes('"') ? '"' : "'";
+
+    // Replace email
+    if (fieldDescriptor.includes('email') && this.credentials.email) {
+      return instruction.replace(
+        /Type\s+["']([^"']+)["']/i,
+        `Type ${originalQuote}${this.credentials.email}${originalQuote}`
+      );
+    }
+
+    // Replace password
+    if (fieldDescriptor.includes('password') && this.credentials.password) {
+      return instruction.replace(
+        /Type\s+["']([^"']+)["']/i,
+        `Type ${originalQuote}${this.credentials.password}${originalQuote}`
+      );
+    }
+
+    return instruction;
+  }
+
+  /**
+   * Check if credentials have been captured.
+   *
+   * @returns True if both email and password are captured
+   */
+  hasCredentials(): boolean {
+    return this.credentials.email !== null && this.credentials.password !== null;
+  }
+
+  /**
+   * Get captured credentials (for debugging/logging).
+   *
+   * @returns Object with email and password (may be null)
+   */
+  getCredentials(): { email: string | null; password: string | null } {
+    return { ...this.credentials };
+  }
+
+  /**
+   * Reset captured credentials.
+   * Call this when starting a new behavior chain.
+   */
+  reset(): void {
+    this.credentials = { email: null, password: null };
+  }
+}
+
+/**
+ * Build the complete dependency chain for a behavior.
+ * Returns array of chain steps in execution order (dependencies first, target last).
+ * Each step carries the scenario name specified by the dependent behavior.
+ *
+ * @param targetBehaviorId - The behavior to execute
+ * @param allBehaviors - Map of all available behaviors
+ * @returns Array of ChainSteps in execution order
+ * @throws Error if behavior or any dependency not found
+ *
+ * @example
+ * // For "delete-task" with dependencies: add-task → sign-in → sign-up
+ * const chain = buildDependencyChain('delete-task', behaviors);
+ * // Returns: [{behavior: sign-up, scenarioName: "User creates a new account"}, ...]
+ */
+export function buildDependencyChain(
+  targetBehaviorId: string,
+  allBehaviors: Map<string, import('./types').HarborBehavior>
+): ChainStep[] {
+  const targetBehavior = allBehaviors.get(targetBehaviorId);
+
+  if (!targetBehavior) {
+    throw new Error(`Behavior "${targetBehaviorId}" not found`);
+  }
+
+  const chain: ChainStep[] = [];
+  const visited = new Set<string>();
+
+  /**
+   * Recursively build chain by traversing dependencies depth-first.
+   * scenarioName is the scenario requested by the behavior that declared this dependency.
+   */
+  function buildChainRecursive(behaviorId: string, scenarioName?: string): void {
+    // Prevent infinite loops (circular dependencies)
+    if (visited.has(behaviorId)) {
+      return;
+    }
+    visited.add(behaviorId);
+
+    const behavior = allBehaviors.get(behaviorId);
+
+    if (!behavior) {
+      throw new Error(`Dependency "${behaviorId}" not found for behavior chain`);
+    }
+
+    // Process dependencies first (depth-first), propagating their scenario names
+    for (const dep of behavior.dependencies) {
+      buildChainRecursive(dep.behaviorId, dep.scenarioName);
+    }
+
+    // Add this behavior after its dependencies
+    chain.push({ behavior, scenarioName });
+  }
+
+  buildChainRecursive(targetBehaviorId);
+
+  return chain;
+}
+
+/**
+ * Process steps for a behavior, handling credential injection.
+ *
+ * For Sign Up behaviors: Captures credentials from Type steps
+ * For Sign In behaviors: Injects captured credentials into Type steps
+ * For other behaviors: Returns steps unchanged
+ *
+ * @param behavior - The behavior being executed
+ * @param steps - The steps to process
+ * @param credentialTracker - Credential tracker instance
+ * @returns Processed steps with credentials injected if applicable
+ */
+export function processStepsWithCredentials(
+  behavior: import('./types').HarborBehavior,
+  steps: import('./types').SpecStep[],
+  credentialTracker: CredentialTracker
+): import('./types').SpecStep[] {
+  const behaviorId = behavior.id.toLowerCase();
+
+  // For Sign Up: Generate unique email to avoid duplicate registration
+  if (behaviorId.includes('sign-up') || behaviorId.includes('signup')) {
+    const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
+    return steps.map(step => {
+      if (step.type !== 'act') return step;
+      const match = step.instruction.match(typePattern);
+      if (!match) return step;
+      const fieldDescriptor = match[2].toLowerCase();
+      if (fieldDescriptor.includes('email')) {
+        const originalEmail = match[1];
+        const uniqueEmail = credentialTracker.uniquifyEmail(originalEmail);
+        const quote = step.instruction.includes('"') ? '"' : "'";
+        return {
+          ...step,
+          instruction: step.instruction.replace(
+            /Type\s+["']([^"']+)["']/i,
+            `Type ${quote}${uniqueEmail}${quote}`
+          ),
+        };
+      }
+      return step;
+    });
+  }
+
+  // For all other behaviors: Inject captured credentials into sign-in preamble.
+  // Only the first 5 steps are candidates (Navigate, Type email, Type password,
+  // Click Sign In). This avoids replacing email/password fields in
+  // behavior-specific steps (e.g., candidate email in Add Candidate).
+  //
+  // Skip injection for behaviors that intentionally test invalid/wrong credentials
+  // (e.g., "Invalid Sign In"). These behaviors depend on Sign Up to have a user
+  // in the system, but their steps deliberately use wrong credentials.
+  if (behaviorId.includes('invalid') || behaviorId.includes('wrong')) {
+    return steps;
+  }
+
+  if (credentialTracker.hasCredentials()) {
+    return steps.map((step, index) => {
+      if (step.type === 'act' && index < 5) {
+        return {
+          ...step,
+          instruction: credentialTracker.injectIntoStep(step.instruction),
+        };
+      }
+      return step;
+    });
+  }
+
+  return steps;
+}
+
+/**
+ * Calculate reward score from behavior results.
+ * Reward = passed behaviors / total behaviors
+ *
+ * Note: dependency_failed counts as FAIL for scoring purposes.
+ *
+ * @param results - Array of behavior results
+ * @returns Reward score between 0 and 1
+ */
+export function calculateReward(results: import('./types').BehaviorContext[]): number {
+  if (results.length === 0) return 0;
+
+  const passed = results.filter(r => r.status === 'pass').length;
+  return passed / results.length;
+}
+
+/**
+ * Aggregate behavior results into summary statistics.
+ *
+ * @param results - Array of behavior results
+ * @returns Aggregated statistics with counts and reward
+ */
+export function aggregateResults(results: import('./types').BehaviorContext[]): Omit<import('./types').VerificationSummary, 'summary' | 'behaviors' | 'duration'> {
+  const passed = results.filter(r => r.status === 'pass').length;
+  const failed = results.filter(r => r.status === 'fail').length;
+  const dependency_failed = results.filter(r => r.status === 'dependency_failed').length;
+
+  return {
+    passed,
+    failed,
+    dependency_failed,
+    total: results.length,
+    reward: calculateReward(results)
+  };
+}
+
+/**
+ * Generate human-readable summary from behavior results.
+ *
+ * @param results - Array of behavior results
+ * @returns Human-readable summary text
+ *
+ * @example
+ * "2 behaviors passed, 1 failed (Sign In), 3 failed due to dependencies"
+ */
+export function generateSummary(results: import('./types').BehaviorContext[]): string {
+  const { passed, failed, dependency_failed } = aggregateResults(results);
+
+  const parts: string[] = [];
+
+  // Passed count
+  if (passed === 1) {
+    parts.push('1 behavior passed');
+  } else {
+    parts.push(`${passed} behaviors passed`);
+  }
+
+  // Failed count with names
+  if (failed > 0) {
+    const failedNames = results
+      .filter(r => r.status === 'fail')
+      .map(r => r.behaviorName)
+      .join(', ');
+
+    if (failed === 1) {
+      parts.push(`1 failed (${failedNames})`);
+    } else {
+      parts.push(`${failed} failed (${failedNames})`);
+    }
+  }
+
+  // Dependency failed count
+  if (dependency_failed > 0) {
+    if (dependency_failed === 1) {
+      parts.push('1 failed due to dependencies');
+    } else {
+      parts.push(`${dependency_failed} failed due to dependencies`);
+    }
+  }
+
+  return parts.join(', ');
+}
+
+/**
+ * Create full verification summary from behavior results.
+ *
+ * @param results - Array of behavior results
+ * @param duration - Total duration in milliseconds
+ * @returns Complete verification summary
+ */
+export function createVerificationSummary(
+  results: import('./types').BehaviorContext[],
+  duration: number
+): import('./types').VerificationSummary {
+  const aggregated = aggregateResults(results);
+
+  return {
+    ...aggregated,
+    summary: generateSummary(results),
+    behaviors: results,
+    duration
+  };
+}
+
+/**
+ * Verify a behavior along with its full dependency chain.
+ * Executes all dependencies first, then the target behavior.
+ *
+ * @param targetBehavior - The behavior to verify
+ * @param allBehaviors - Map of all available behaviors
+ * @param context - Verification context for tracking results
+ * @param credentialTracker - Credential tracker for Sign Up/Sign In
+ * @param runner - SpecTestRunner instance for executing examples
+ * @returns Behavior verification result
+ */
+export async function verifyBehaviorWithDependencies(
+  targetBehavior: import('./types').HarborBehavior,
+  allBehaviors: Map<string, import('./types').HarborBehavior>,
+  context: VerificationContext,
+  credentialTracker: CredentialTracker,
+  runner: any
+): Promise<import('./types').BehaviorContext> {
+  const startTime = Date.now();
+
+  // Skip if a dependency already failed as a target behavior — no point
+  // re-testing a chain that can't succeed.
+  const skipCheck = context.shouldSkip(targetBehavior.dependencies.map(d => d.behaviorId));
+  if (skipCheck.skip) {
+    return {
+      behaviorId: targetBehavior.id,
+      behaviorName: targetBehavior.title,
+      status: 'dependency_failed',
+      failedDependency: skipCheck.reason,
+      duration: 0
+    };
+  }
+
+  // Build full dependency chain
+  const chain = buildDependencyChain(targetBehavior.id, allBehaviors);
+
+  // Execute each behavior in the chain from scratch.
+  // Every chain runs the full dependency sequence with fresh browser state
+  // and unique credentials to guarantee the ideal state for the target behavior.
+  for (let chainIndex = 0; chainIndex < chain.length; chainIndex++) {
+    const { behavior, scenarioName } = chain[chainIndex];
+
+    // Pick scenario by name if specified, otherwise fall back to first example
+    const example = scenarioName
+      ? behavior.examples.find(e => e.name === scenarioName) ?? behavior.examples[0]
+      : behavior.examples[0];
+    if (!example) {
+      return {
+        behaviorId: targetBehavior.id,
+        behaviorName: targetBehavior.title,
+        status: 'fail',
+        error: `No examples found for behavior: ${behavior.title}`,
+        duration: Date.now() - startTime
+      };
+    }
+
+    // Process steps with credential injection
+    const processedSteps = processStepsWithCredentials(
+      behavior,
+      example.steps,
+      credentialTracker
+    );
+
+    // Log credential state for diagnostics
+    const creds = credentialTracker.getCredentials();
+    console.log(`Chain step [${behavior.id}]: email=${creds.email ?? '(none)'}, password=${creds.password ?? '(none)'}`);
+
+    // Execute the example (wrapped in try-catch for browser crashes).
+    // Only clear localStorage for the first step of the chain. Subsequent steps
+    // preserve localStorage so that app data (user accounts in SPAs) created by
+    // earlier steps (e.g., Sign Up) survives into later steps (e.g., Sign In).
+    const exampleToRun = { ...example, steps: processedSteps };
+    let result: import('./types').ExampleResult;
+    try {
+      result = await runner.runExample(exampleToRun, { clearLocalStorage: chainIndex === 0 });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const behaviorResult: import('./types').BehaviorContext = {
+        behaviorId: behavior.id,
+        behaviorName: behavior.title,
+        status: 'fail',
+        error: `Runner crash: ${errorMessage}`,
+        duration: Date.now() - startTime,
+      };
+
+      if (behavior.id !== targetBehavior.id) {
+        return {
+          behaviorId: targetBehavior.id,
+          behaviorName: targetBehavior.title,
+          status: 'dependency_failed',
+          failedDependency: behavior.title,
+          duration: Date.now() - startTime,
+        };
+      }
+      return behaviorResult;
+    }
+
+    // Capture credentials if this is Sign Up (from processed steps to get uniquified email)
+    if (behavior.id.includes('sign-up') || behavior.id.includes('signup')) {
+      for (const step of processedSteps) {
+        if (step.type === 'act') {
+          credentialTracker.captureFromStep(step.instruction);
+        }
+      }
+    }
+
+    // Check if execution succeeded
+    if (!result.success) {
+      const behaviorResult: import('./types').BehaviorContext = {
+        behaviorId: behavior.id,
+        behaviorName: behavior.title,
+        status: 'fail',
+        error: result.failedAt?.context.error,
+        duration: result.duration
+      };
+
+      // If this is not the target, the target fails due to dependency
+      if (behavior.id !== targetBehavior.id) {
+        return {
+          behaviorId: targetBehavior.id,
+          behaviorName: targetBehavior.title,
+          status: 'dependency_failed',
+          failedDependency: behavior.title,
+          duration: Date.now() - startTime
+        };
+      }
+
+      // This is the target behavior itself failing
+      return {
+        behaviorId: targetBehavior.id,
+        behaviorName: targetBehavior.title,
+        status: 'fail',
+        error: result.failedAt?.context.error,
+        duration: Date.now() - startTime
+      };
+    }
+
+  }
+
+  // All behaviors in chain passed
+  return {
+    behaviorId: targetBehavior.id,
+    behaviorName: targetBehavior.title,
+    status: 'pass',
+    duration: Date.now() - startTime
+  };
+}
+
+/** Default timeout per behavior in milliseconds (2 minutes) */
+const DEFAULT_BEHAVIOR_TIMEOUT_MS = 120_000;
+
+/**
+ * Wrap a promise with a timeout.
+ * @param promise - Promise to wrap
+ * @param ms - Timeout in milliseconds
+ * @param timeoutError - Error message on timeout
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(timeoutError)), ms)
+    ),
+  ]);
+}
+
+/**
+ * Verify all behaviors from an instruction.md file with dependency tracking.
+ *
+ * @param instructionPath - Path to instruction.md file
+ * @param runner - SpecTestRunner instance
+ * @param behaviorTimeoutMs - Timeout per behavior in milliseconds (default: 2 minutes)
+ * @returns Complete verification summary
+ */
+export async function verifyAllBehaviors(
+  instructionPath: string,
+  runner: any,
+  behaviorTimeoutMs: number = DEFAULT_BEHAVIOR_TIMEOUT_MS
+): Promise<import('./types').VerificationSummary> {
+  const startTime = Date.now();
+
+  // 1. Parse instruction with dependencies
+  const content = await readFile(instructionPath, 'utf-8');
+  const allBehaviors = parseHarborBehaviorsWithDependencies(content);
+
+  // 2. Initialize context and credential tracker
+  const context = new VerificationContext();
+  const credentialTracker = new CredentialTracker();
+
+  // 3. Verify each behavior with full dependency chain
+  const results: import('./types').BehaviorContext[] = [];
+  for (const behavior of allBehaviors.values()) {
+    // Reset credentials for each behavior chain
+    credentialTracker.reset();
+
+    const behaviorStart = Date.now();
+    try {
+      const result = await withTimeout(
+        verifyBehaviorWithDependencies(
+          behavior,
+          allBehaviors,
+          context,
+          credentialTracker,
+          runner
+        ),
+        behaviorTimeoutMs,
+        `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
+      );
+
+      context.markResult(behavior.id, result);
+      results.push(result);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isTimeout = errorMessage.includes('timed out');
+      const failResult: import('./types').BehaviorContext = {
+        behaviorId: behavior.id,
+        behaviorName: behavior.title,
+        status: 'fail',
+        error: isTimeout ? errorMessage : `Unexpected error: ${errorMessage}`,
+        duration: Date.now() - behaviorStart,
+      };
+      context.markResult(behavior.id, failResult);
+      results.push(failResult);
+    }
+  }
+
+  // 4. Create summary
+  const duration = Date.now() - startTime;
+  return createVerificationSummary(results, duration);
 }
 
 /**
@@ -671,7 +1594,7 @@ function generateSuggestions(
                             errorMessage.includes('schema') ||
                             errorMessage.includes('not found') ||
                             errorMessage.includes('no element');
-  const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('timed out');
+  const isTimeout = errorMessage.toLowerCase().includes('timeout') || errorMessage.toLowerCase().includes('timed out');
   const isPageStateIssue = errorMessage.includes('Unexpected page state') ||
                             errorMessage.includes('login page') ||
                             errorMessage.includes('session may have expired') ||
@@ -750,7 +1673,7 @@ function generateSuggestions(
 
   if (isTimeout) {
     return [
-      'The operation timed out waiting for a response',
+      'The operation hit a timeout while waiting for a response',
       'The page may be slow to load or unresponsive',
       'Check for JavaScript errors in the application',
       'Consider if the application is properly running',
@@ -828,7 +1751,52 @@ async function getEnhancedErrorContext(
     // Ignore errors getting page context
   }
 
-  return `Element not found: Could not locate element for "${instruction}".${pageContext}${pageStateWarning}${visibleElements} The UI element may not exist, have a different label, or the page state changed unexpectedly. (Attempted ${attempt}/${MAX_RETRIES} retries)`;
+  return `Act failed: Could not execute "${instruction}".${pageContext}${pageStateWarning}${visibleElements} The target element may not exist, have a different label, or the page state changed unexpectedly. (Attempted ${attempt}/${MAX_RETRIES} retries)`;
+}
+
+/**
+ * Build error context for Check step failures.
+ * Uses "Check failed" prefix instead of "Element not found" to distinguish from Act failures.
+ */
+async function getCheckErrorContext(
+  page: Page,
+  instruction: string,
+  attempt: number
+): Promise<string> {
+  let pageContext = '';
+  let visibleElements = '';
+
+  try {
+    const currentUrl = page.url();
+    const title = await page.title();
+    pageContext = ` Current page: "${title}" (${currentUrl}).`;
+
+    const elements = await page.evaluate(() => {
+      const interactiveSelectors = 'button, a, input, select, [role="button"], [onclick]';
+      const els = Array.from(document.querySelectorAll(interactiveSelectors));
+      return els.slice(0, 10).map(el => {
+        const tag = el.tagName.toLowerCase();
+        const text = (el.textContent || '').trim().slice(0, 30);
+        const type = el.getAttribute('type') || '';
+        const placeholder = el.getAttribute('placeholder') || '';
+
+        let desc = tag;
+        if (type) desc += `[type=${type}]`;
+        if (text) desc += `: "${text}"`;
+        else if (placeholder) desc += `: "${placeholder}"`;
+
+        return desc;
+      });
+    });
+
+    if (elements.length > 0) {
+      visibleElements = ` Visible elements: [${elements.join(', ')}].`;
+    }
+  } catch {
+    // Ignore errors getting page context
+  }
+
+  return `Check failed: "${instruction}" was not satisfied.${pageContext}${visibleElements} (Attempted ${attempt}/${MAX_RETRIES} retries)`;
 }
 
 /**
@@ -884,7 +1852,7 @@ function extractExpectedText(instruction: string): { text: string; shouldExist: 
   const patterns = [
     /(?:the\s+text\s+)?["']([^"']+)["']\s+(?:no\s+longer\s+)?appears/i,
     /(?:should\s+)?(?:see|show|display|contain)\s+["']([^"']+)["']/i,
-    /["']([^"']+)["']\s+(?:is\s+)?(?:visible|shown|displayed)/i,
+    /["']([^"']+)["']\s+(?:is\s+)?(?:no\s+longer\s+)?(?:visible|shown|displayed)/i,
   ];
 
   for (const pattern of patterns) {
@@ -927,6 +1895,8 @@ export class SpecTestRunner {
   private stagehand: Stagehand | null = null;
   private tester: Tester | null = null;
   private currentSpec: TestableSpec | null = null;
+  /** URL captured before the most recent Act step, used to detect page transitions */
+  private preActUrl: string | null = null;
 
   constructor(config: SpecTestConfig) {
     this.config = config;
@@ -1103,67 +2073,129 @@ export class SpecTestRunner {
    * - Reset + snapshot before each Act (new baseline)
    * - Check steps take "after" snapshot and assert
    */
-  async runExample(example: SpecExample): Promise<ExampleResult> {
+  async runExample(example: SpecExample, options?: { clearLocalStorage?: boolean }): Promise<ExampleResult> {
     const startTime = Date.now();
-    const { stagehand, tester } = await this.initialize();
-    const stagehandPage = stagehand.context.activePage();
 
-    if (!stagehandPage) {
-      throw new Error("No active page available");
-    }
+    try {
+      const { stagehand, tester } = await this.initialize();
+      const stagehandPage = stagehand.context.activePage();
 
-    // Cast Stagehand's Page to Playwright's Page for type compatibility
-    const page = stagehandPage as unknown as Page;
-
-    // Navigate to base URL (fresh start for each example)
-    await page.goto(this.config.baseUrl);
-
-    // Take initial snapshot - establishes first "before" baseline
-    await tester.snapshot(page);
-
-    const stepResults: StepResult[] = [];
-    let failedAt: ExampleResult["failedAt"] | undefined;
-
-    for (let i = 0; i < example.steps.length; i++) {
-      const step = example.steps[i];
-      const context: StepContext = {
-        stepIndex: i,
-        totalSteps: example.steps.length,
-        previousResults: stepResults,
-        page,
-        stagehand,
-        tester,
-      };
-
-      const stepResult = await this.runStep(step, context);
-      stepResults.push(stepResult);
-
-      if (!stepResult.success) {
-        const error = new Error(
-          step.type === "act"
-            ? stepResult.actResult?.error ?? "Act step failed"
-            : stepResult.checkResult?.actual ?? "Check step failed"
-        );
-        const failureContext = await generateFailureContext(page, step, error);
-
-        failedAt = {
-          stepIndex: i,
-          step,
-          context: failureContext,
-        };
-        break;
+      if (!stagehandPage) {
+        throw new Error("No active page available");
       }
+
+      // Cast Stagehand's Page to Playwright's Page for type compatibility
+      const page = stagehandPage as unknown as Page;
+
+      // Clear browser state so each example starts with a fresh session.
+      // This prevents session carry-over between chain steps (e.g., Sign Up
+      // logging the user in, which would cause Sign In to land on the tasks
+      // page instead of the login page).
+      //
+      // localStorage is only cleared when clearLocalStorage is true (default).
+      // Within a dependency chain, subsequent steps preserve localStorage to
+      // keep app data (e.g., user accounts in SPA apps) created by earlier steps.
+      const shouldClearLocalStorage = options?.clearLocalStorage !== false;
+      try {
+        const browserContext = page.context();
+        await browserContext.clearCookies();
+        await page.evaluate((clearLS) => {
+          if (clearLS) {
+            try { localStorage.clear(); } catch {}
+          }
+          try { sessionStorage.clear(); } catch {}
+        }, shouldClearLocalStorage);
+      } catch {
+        // Ignore errors clearing state - page may not be ready yet
+      }
+
+      // Navigate to base URL (fresh start for each example)
+      await page.goto(this.config.baseUrl);
+
+      // Take initial snapshot - establishes first "before" baseline
+      await tester.snapshot(page);
+
+      const stepResults: StepResult[] = [];
+      let failedAt: ExampleResult["failedAt"] | undefined;
+
+      for (let i = 0; i < example.steps.length; i++) {
+        const step = example.steps[i];
+        const context: StepContext = {
+          stepIndex: i,
+          totalSteps: example.steps.length,
+          previousResults: stepResults,
+          page,
+          stagehand,
+          tester,
+        };
+
+        const stepResult = await this.runStep(step, context);
+        stepResults.push(stepResult);
+
+        if (!stepResult.success) {
+          const error = new Error(
+            step.type === "act"
+              ? stepResult.actResult?.error ?? "Act step failed"
+              : stepResult.checkResult?.actual ?? "Check step failed"
+          );
+
+          let failureContext: FailureContext;
+          try {
+            failureContext = await generateFailureContext(page, step, error);
+          } catch {
+            failureContext = {
+              pageSnapshot: "",
+              pageUrl: "",
+              failedStep: step,
+              error: error.message,
+              availableElements: [],
+              suggestions: ["Could not generate failure context - browser may have crashed"],
+            };
+          }
+
+          failedAt = {
+            stepIndex: i,
+            step,
+            context: failureContext,
+          };
+          break;
+        }
+      }
+
+      const duration = Date.now() - startTime;
+
+      return {
+        example,
+        success: !failedAt,
+        steps: stepResults,
+        duration,
+        failedAt,
+      };
+    } catch (error) {
+      // Catch-all for browser crashes, initialization failures, navigation errors
+      const duration = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const fallbackStep = example.steps[0] ?? { type: "act" as const, instruction: "initialize" };
+
+      return {
+        example,
+        success: false,
+        steps: [],
+        duration,
+        failedAt: {
+          stepIndex: 0,
+          step: fallbackStep,
+          context: {
+            pageSnapshot: "",
+            pageUrl: "",
+            failedStep: fallbackStep,
+            error: errorMessage,
+            availableElements: [],
+            suggestions: ["Browser or page initialization failed - check browser availability"],
+          },
+        },
+      };
     }
-
-    const duration = Date.now() - startTime;
-
-    return {
-      example,
-      success: !failedAt,
-      steps: stepResults,
-      duration,
-      failedAt,
-    };
   }
 
   /**
@@ -1176,13 +2208,16 @@ export class SpecTestRunner {
    * - Retry logic (3 retries) for transient Stagehand errors
    *
    * For Check steps: Tries direct text verification first via page.locator(),
-   * falls back to Stagehand observe() for complex checks.
+   * then uses semantic checks with page-transition-aware oracle selection.
    */
   async runStep(step: SpecStep, context: StepContext): Promise<StepResult> {
     const { page, stagehand, tester } = context;
     const stepStart = Date.now();
 
     if (step.type === "act") {
+      // Capture URL before action for page-transition detection
+      this.preActUrl = page.url();
+
       // Before executing Act: reset snapshots and take fresh "before" baseline
       // This ensures the upcoming Check steps compare against pre-action state
       tester.clearSnapshots();
@@ -1276,6 +2311,10 @@ export class SpecTestRunner {
       }
     }
 
+    // Detect page transition: URL changed since the last Act step
+    const currentUrl = page.url();
+    const pageTransitioned = this.preActUrl !== null && currentUrl !== this.preActUrl;
+
     // Semantic check with retry logic
     const checkType = step.checkType ?? "semantic";
     const checkResult = await this.executeCheckWithRetry(
@@ -1283,7 +2322,8 @@ export class SpecTestRunner {
       checkType,
       page,
       tester,
-      stagehand
+      stagehand,
+      pageTransitioned
     );
     const duration = Date.now() - stepStart;
 
@@ -1335,9 +2375,18 @@ export class SpecTestRunner {
           await this.delay(RETRY_DELAY);
           continue;
         }
-        // Enhance error with context
-        const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
-        throw new Error(enhancedError);
+        // Return failure result instead of throwing
+        let errorMsg: string;
+        try {
+          errorMsg = await getEnhancedErrorContext(page, instruction, attempt);
+        } catch {
+          errorMsg = rawError.message;
+        }
+        return {
+          success: false,
+          duration: 0,
+          error: errorMsg,
+        };
       }
     }
 
@@ -1351,62 +2400,125 @@ export class SpecTestRunner {
   }
 
   /**
+   * Double-check a semantic failure using stagehand.extract() with a boolean zod schema.
+   * Returns true if the condition is actually satisfied (b-test false negative).
+   */
+  private async doubleCheckWithExtract(
+    instruction: string,
+    stagehand: Stagehand
+  ): Promise<boolean> {
+    try {
+      const schema = z.object({
+        passed: z.boolean().describe(
+          "true if the condition is satisfied by ANY element currently visible on the page, false only if NO element matches"
+        ),
+      });
+      const enhancedInstruction = `Look at ALL visible elements on the page (buttons, links, text, navigation items, headings, forms). Evaluate whether this condition is satisfied: "${instruction}". If the condition uses "or", it passes if ANY part is true.`;
+      const result = await stagehand.extract(enhancedInstruction, schema);
+      console.log(`extract() double-check for "${instruction.slice(0, 80)}...": ${result.passed}`);
+      return result.passed;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.log(`extract() double-check threw: ${msg}`);
+      return false;
+    }
+  }
+
+  /**
    * Execute a Check step with retry logic for transient errors.
-   * Enhanced with rich error context including page state and visible elements.
+   *
+   * Strategy depends on whether the page transitioned (URL changed):
+   * - Same page: b-test (diff) primary → extract() rescue on failure
+   * - Page transition: extract() primary → b-test rescue on failure
+   *
+   * b-test diffs are unreliable after full page transitions because the entire
+   * DOM changes and the LLM can't confirm specific elements from the diff.
+   * extract() evaluates current page state directly, making it ideal for
+   * post-navigation checks like "the dashboard shows a Create button".
    */
   private async executeCheckWithRetry(
     instruction: string,
     checkType: "deterministic" | "semantic",
     page: Page,
     tester: Tester,
-    stagehand: Stagehand
+    stagehand: Stagehand,
+    pageTransitioned: boolean = false
   ): Promise<CheckResult> {
     let lastError: Error | undefined;
     let lastAttempt = 1;
 
+    let lastFailResult: CheckResult | undefined;
+
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       lastAttempt = attempt;
       try {
-        // For semantic checks, try Stagehand observe() as fallback
-        if (checkType === "semantic") {
-          try {
-            const observations = await stagehand.observe(instruction);
-            const passed = observations.length > 0;
-            if (passed) {
-              return {
-                passed: true,
-                checkType: "semantic",
-                expected: instruction,
-                actual: "Condition observed",
-              };
-            }
-            // Not passed - get enhanced context for better error message
-            const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
+        // For page transitions, use extract() as primary oracle
+        if (checkType === "semantic" && pageTransitioned) {
+          console.log(`Page transitioned (attempt ${attempt}/${MAX_RETRIES}) — using extract() as primary for: "${instruction.slice(0, 80)}..."`);
+          const extractPassed = await this.doubleCheckWithExtract(instruction, stagehand);
+          if (extractPassed) {
             return {
-              passed: false,
+              passed: true,
               checkType: "semantic",
               expected: instruction,
-              actual: enhancedError,
+              actual: "Condition confirmed by extract() (page transition — extract primary)",
             };
-          } catch (error) {
-            const rawError = error instanceof Error ? error : new Error(String(error));
-            if (this.isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
-              lastError = rawError;
-              await this.delay(RETRY_DELAY);
-              continue;
-            }
-            // Get enhanced error context for schema/AI errors
-            const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
+          }
+
+          // extract() said fail — double-check with b-test before confirming
+          const bTestResult = await executeCheckStep(instruction, checkType, page, tester);
+          if (bTestResult.passed) {
             return {
-              passed: false,
+              passed: true,
               checkType: "semantic",
               expected: instruction,
-              actual: enhancedError,
+              actual: "Condition confirmed by b-test (extract false negative mitigated)",
+            };
+          }
+
+          // Both agree on failure — retry if attempts remain
+          lastFailResult = bTestResult;
+          if (attempt < MAX_RETRIES) {
+            console.log(`Both oracles failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
+            await this.delay(RETRY_DELAY);
+            continue;
+          }
+
+          const errorContext = await getCheckErrorContext(page, instruction, attempt);
+          return { ...bTestResult, actual: errorContext };
+        }
+
+        // Same-page flow: b-test primary → extract() rescue
+        const result = await executeCheckStep(instruction, checkType, page, tester);
+
+        if (result.passed) return result;
+
+        // Double-check semantic failures with extract()
+        if (checkType === "semantic") {
+          const extractConfirm = await this.doubleCheckWithExtract(instruction, stagehand);
+          if (extractConfirm) {
+            return {
+              passed: true,
+              checkType: "semantic",
+              expected: instruction,
+              actual: "Condition confirmed by extract() (b-test false negative mitigated)",
             };
           }
         }
 
-        return await executeCheckStep(instruction, checkType, page, tester);
+        // Both failed — retry if attempts remain
+        lastFailResult = result;
+        if (checkType === "semantic" && attempt < MAX_RETRIES) {
+          console.log(`Both oracles failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
+          await this.delay(RETRY_DELAY);
+          continue;
+        }
+
+        if (checkType === "semantic") {
+          const errorContext = await getCheckErrorContext(page, instruction, attempt);
+          return { ...result, actual: errorContext };
+        }
+        return result;
       } catch (error) {
         const rawError = error instanceof Error ? error : new Error(String(error));
         if (this.isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
@@ -1414,24 +2526,23 @@ export class SpecTestRunner {
           await this.delay(RETRY_DELAY);
           continue;
         }
-        // Get enhanced error context
-        const enhancedError = await getEnhancedErrorContext(page, instruction, attempt);
+        const errorContext = await getCheckErrorContext(page, instruction, attempt);
         return {
           passed: false,
           checkType,
           expected: instruction,
-          actual: enhancedError,
+          actual: errorContext,
         };
       }
     }
 
-    // Final failure after all retries - get enhanced context
-    const enhancedError = await getEnhancedErrorContext(page, instruction, lastAttempt);
+    // Final failure after all retries
+    const errorContext = await getCheckErrorContext(page, instruction, lastAttempt);
     return {
       passed: false,
       checkType,
       expected: instruction,
-      actual: enhancedError,
+      actual: errorContext,
     };
   }
 
