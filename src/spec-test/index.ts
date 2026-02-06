@@ -1259,11 +1259,13 @@ function stripLoginSteps(steps: SpecStep[]): SpecStep[] {
       return false;
     }
 
-    // Strip Sign In / Login button clicks
-    if ((instruction.includes('click') || instruction.includes('press')) &&
-        (instruction.includes('sign in') || instruction.includes('signin') ||
-         instruction.includes('log in') || instruction.includes('login')) &&
-        !instruction.includes('sign out') && !instruction.includes('logout')) {
+    // Strip Sign In / Login button clicks and form submissions
+    // Handle variations: "sign in", "signin", "sign-in", "log in", "login", "submit...sign-in"
+    if ((instruction.includes('click') || instruction.includes('press') || instruction.includes('submit')) &&
+        (instruction.includes('sign in') || instruction.includes('signin') || instruction.includes('sign-in') ||
+         instruction.includes('log in') || instruction.includes('login') || instruction.includes('log-in')) &&
+        !instruction.includes('sign out') && !instruction.includes('signout') &&
+        !instruction.includes('logout') && !instruction.includes('log out') && !instruction.includes('log-out')) {
       return false;
     }
 
@@ -1285,16 +1287,17 @@ function filterSignOutStepsForAuthFlow(steps: SpecStep[]): SpecStep[] {
     if (step.type === 'check') return true;
     const instruction = step.instruction.toLowerCase();
     // Keep only the Sign Out action
-    if (instruction.includes('sign out') || instruction.includes('signout') ||
-        instruction.includes('log out') || instruction.includes('logout')) {
+    if (instruction.includes('sign out') || instruction.includes('signout') || instruction.includes('sign-out') ||
+        instruction.includes('log out') || instruction.includes('logout') || instruction.includes('log-out')) {
       return true;
     }
-    // Skip everything else (navigation, login, etc.)
+    // Skip everything else (navigation, login, submit sign-in, etc.)
     if (instruction.includes('navigate') ||
         instruction.includes('email') ||
         instruction.includes('password') ||
-        instruction.includes('sign in') || instruction.includes('signin') ||
-        instruction.includes('log in') || instruction.includes('login')) {
+        instruction.includes('submit') ||
+        instruction.includes('sign in') || instruction.includes('signin') || instruction.includes('sign-in') ||
+        instruction.includes('log in') || instruction.includes('login') || instruction.includes('log-in')) {
       return false;
     }
     return true;
