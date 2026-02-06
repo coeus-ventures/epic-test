@@ -58,6 +58,86 @@ export interface TestableSpec {
 }
 
 /**
+ * A dependency reference with optional scenario targeting.
+ * When scenarioName is provided, the chain executor runs that specific
+ * scenario instead of defaulting to examples[0].
+ */
+export interface BehaviorDependency {
+  /** Slugified behavior ID (e.g., "sign-up") */
+  behaviorId: string;
+  /** Scenario name to run (e.g., "User creates a new account") */
+  scenarioName?: string;
+}
+
+/**
+ * A single step in the dependency chain with scenario info.
+ */
+export interface ChainStep {
+  /** The behavior to execute */
+  behavior: HarborBehavior;
+  /** Scenario name to execute, if specified by the dependent behavior */
+  scenarioName?: string;
+}
+
+/**
+ * A complete behavior definition with dependencies (Harbor format)
+ */
+export interface HarborBehavior {
+  /** Unique identifier (slugified title) */
+  id: string;
+  /** Display title */
+  title: string;
+  /** Behavior description */
+  description?: string;
+  /** Dependencies with optional scenario targeting */
+  dependencies: BehaviorDependency[];
+  /** Examples/scenarios with steps */
+  examples: SpecExample[];
+}
+
+/**
+ * Context for a single behavior verification result.
+ * Used by VerificationContext to track pass/fail status.
+ */
+export interface BehaviorContext {
+  /** Unique behavior ID (slugified title) */
+  behaviorId: string;
+  /** Display name of the behavior */
+  behaviorName: string;
+  /** Verification status */
+  status: 'pass' | 'fail' | 'dependency_failed';
+  /** Which dependency caused a skip (if status is dependency_failed) */
+  failedDependency?: string;
+  /** Error message if failed */
+  error?: string;
+  /** Execution duration in milliseconds */
+  duration: number;
+}
+
+/**
+ * Aggregated verification results for a set of behaviors.
+ * Used to summarize overall verification status.
+ */
+export interface VerificationSummary {
+  /** Number of behaviors that passed */
+  passed: number;
+  /** Number of behaviors that failed their own tests */
+  failed: number;
+  /** Number of behaviors skipped due to failed dependencies */
+  dependency_failed: number;
+  /** Total number of behaviors tested */
+  total: number;
+  /** Reward score (passed / total) */
+  reward: number;
+  /** Human-readable summary */
+  summary: string;
+  /** Individual behavior results */
+  behaviors: BehaviorContext[];
+  /** Total duration in milliseconds */
+  duration: number;
+}
+
+/**
  * A single step in a specification
  */
 export interface SpecStep {
@@ -210,4 +290,8 @@ export interface StepContext {
   stagehand: Stagehand;
   /** Tester instance */
   tester: Tester;
+  /** Current behavior ID (for credential tracking) */
+  currentBehaviorId?: string;
+  /** Credential tracker (for Sign Up/Sign In) */
+  credentialTracker?: import('./index').CredentialTracker;
 }
