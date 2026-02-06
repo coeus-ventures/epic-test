@@ -2629,14 +2629,14 @@ IMPORTANT evaluation rules:
   /**
    * Execute a Check step with retry logic for transient errors.
    *
-   * Strategy for semantic checks: Always use extract() as primary oracle.
-   * extract() evaluates current page state directly and is more reliable
-   * for semantic conditions like "navigate the application".
+   * Strategy depends on whether the page transitioned (URL changed):
+   * - Same page: b-test (diff) primary → extract() rescue on failure
+   * - Page transition: extract() primary → b-test rescue on failure
    *
-   * b-test (diff-based) is used as rescue if extract() fails, as it may
-   * catch some cases where the condition is satisfied by page changes.
-   *
-   * For deterministic checks: Direct evaluation without LLM.
+   * b-test diffs are unreliable after full page transitions because the entire
+   * DOM changes and the LLM can't confirm specific elements from the diff.
+   * extract() evaluates current page state directly, making it ideal for
+   * post-navigation checks like "the dashboard shows a Create button".
    */
   private async executeCheckWithRetry(
     instruction: string,
@@ -2654,18 +2654,16 @@ IMPORTANT evaluation rules:
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       lastAttempt = attempt;
       try {
-        // For semantic checks, always use extract() as primary oracle
-        // extract() evaluates current page state and is more reliable for
-        // semantic conditions, especially in SPA apps that don't change URL
-        if (checkType === "semantic") {
-          console.log(`Semantic check (attempt ${attempt}/${MAX_RETRIES}) — using extract() as primary for: "${instruction.slice(0, 80)}..."`);
+        // For page transitions, use extract() as primary oracle
+        if (checkType === "semantic" && pageTransitioned) {
+          console.log(`Page transitioned (attempt ${attempt}/${MAX_RETRIES}) — using extract() as primary for: "${instruction.slice(0, 80)}..."`);
           const extractPassed = await this.doubleCheckWithExtract(instruction, stagehand);
           if (extractPassed) {
             return {
               passed: true,
               checkType: "semantic",
               expected: instruction,
-              actual: "Condition confirmed by extract()",
+              actual: "Condition confirmed by extract() (page transition — extract primary)",
             };
           }
 
@@ -2692,8 +2690,36 @@ IMPORTANT evaluation rules:
           return { ...bTestResult, actual: errorContext };
         }
 
-        // Deterministic checks: direct evaluation
+        // Same-page flow: b-test primary → extract() rescue
         const result = await executeCheckStep(instruction, checkType, page, tester);
+
+        if (result.passed) return result;
+
+        // Double-check semantic failures with extract()
+        if (checkType === "semantic") {
+          const extractConfirm = await this.doubleCheckWithExtract(instruction, stagehand);
+          if (extractConfirm) {
+            return {
+              passed: true,
+              checkType: "semantic",
+              expected: instruction,
+              actual: "Condition confirmed by extract() (b-test false negative mitigated)",
+            };
+          }
+        }
+
+        // Both failed — retry if attempts remain
+        lastFailResult = result;
+        if (checkType === "semantic" && attempt < MAX_RETRIES) {
+          console.log(`Both oracles failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`);
+          await this.delay(RETRY_DELAY);
+          continue;
+        }
+
+        if (checkType === "semantic") {
+          const errorContext = await getCheckErrorContext(page, instruction, attempt);
+          return { ...result, actual: errorContext };
+        }
         return result;
       } catch (error) {
         const rawError = error instanceof Error ? error : new Error(String(error));
