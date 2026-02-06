@@ -1969,7 +1969,11 @@ export class SpecTestRunner {
 
     // === CHECK STEP ===
 
-    // Try direct text verification first
+    // Try direct text verification first (fast path).
+    // If the exact text IS found, return immediately (deterministic pass is reliable).
+    // If the exact text is NOT found, DON'T return — fall through to the semantic
+    // dual-oracle (b-test + extract). The agent may have implemented the feature
+    // correctly with slightly different text, and the semantic check will catch it.
     const textCheck = extractExpectedText(step.instruction);
     if (textCheck) {
       try {
@@ -1978,17 +1982,23 @@ export class SpecTestRunner {
           return document.body.innerText.includes(text);
         }, searchText).catch(() => false);
         const passed = textCheck.shouldExist ? exists : !exists;
-        return {
-          step,
-          success: passed,
-          duration: Date.now() - stepStart,
-          checkResult: {
-            passed,
-            checkType: "deterministic",
-            expected: step.instruction,
-            actual: exists ? `Found "${textCheck.text}" on page` : `Text "${textCheck.text}" not found`,
-          },
-        };
+        if (passed) {
+          // Deterministic match confirmed — skip LLM, fast return
+          return {
+            step,
+            success: true,
+            duration: Date.now() - stepStart,
+            checkResult: {
+              passed: true,
+              checkType: "deterministic",
+              expected: step.instruction,
+              actual: exists ? `Found "${textCheck.text}" on page` : `Text "${textCheck.text}" not on page (expected absent)`,
+            },
+          };
+        }
+        // Deterministic check failed — fall through to semantic oracle.
+        // The agent may have used different text but implemented the feature correctly.
+        console.log(`[runStep] Deterministic text check failed for "${textCheck.text}" — falling through to semantic oracle`);
       } catch { /* fall through to semantic check */ }
     }
 

@@ -306,4 +306,23 @@ describe('semantic check: b-test + extract() double-check', () => {
     expect(tester.assert).not.toHaveBeenCalled();
     expect(stagehand.extract).not.toHaveBeenCalled();
   });
+
+  it('quoted text NOT found falls through to semantic oracle (not immediate fail)', async () => {
+    const tester = createMockTester(true); // b-test says pass (semantic rescue)
+    const stagehand = createMockStagehand({ passed: true });
+    const page = createMockPage();
+    // Mock evaluate to return false (text NOT found on page)
+    page.evaluate = vi.fn(async () => false);
+
+    const step = makeSemanticCheckStep('The text "David Lee" appears in the filtered results');
+    const context = makeContext({ page, stagehand, tester });
+
+    const result = await runner.runStep(step, context);
+
+    // Should PASS because semantic oracle (b-test) rescued it
+    expect(result.success).toBe(true);
+    expect(result.checkResult?.checkType).toBe('semantic');
+    // b-test was called as the semantic fallback
+    expect(tester.assert).toHaveBeenCalled();
+  });
 });
