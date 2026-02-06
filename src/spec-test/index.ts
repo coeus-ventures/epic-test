@@ -1769,22 +1769,30 @@ export class SpecTestRunner {
         //    longer act on it.
         await page.goto('about:blank');
 
-        // 2. Clear cookies (they're origin-independent, cleared via browser API)
-        const browserContext = page.context();
-        await browserContext.clearCookies();
-
-        // 3. Navigate to baseUrl to get back on the app's origin. The SPA will
+        // 2. Navigate to baseUrl to get back on the app's origin. The SPA will
         //    load and may briefly read stale localStorage — that's OK because
         //    we clear storage and reload immediately after.
         await page.goto(this.config.baseUrl);
 
-        // 4. Clear localStorage and sessionStorage on the correct origin
+        // 3. Clear localStorage, sessionStorage, and cookies on the correct origin.
+        //    We clear cookies via document.cookie because Stagehand v3's page/context
+        //    wrappers don't expose Playwright's clearCookies(). This clears all
+        //    non-HttpOnly cookies. HttpOnly cookies can't be cleared this way, but
+        //    SPA auth tokens (JWT in localStorage) are the primary mechanism.
         await page.evaluate(() => {
           try { localStorage.clear(); } catch {}
           try { sessionStorage.clear(); } catch {}
+          try {
+            document.cookie.split(';').forEach(c => {
+              const name = c.split('=')[0].trim();
+              if (name) {
+                document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+              }
+            });
+          } catch {}
         }).catch(() => {});
 
-        // 5. Reload so the SPA re-initializes reading the now-empty storage.
+        // 4. Reload so the SPA re-initializes reading the now-empty storage.
         //    This is the step that actually produces the clean sign-in page.
         await page.reload();
         await page.waitForLoadState('networkidle');
@@ -1965,10 +1973,10 @@ export class SpecTestRunner {
     const textCheck = extractExpectedText(step.instruction);
     if (textCheck) {
       try {
-        const escapedText = textCheck.text.replace(/"/g, '\\"');
-        const locator = page.locator(`text="${escapedText}"`);
-        const count = await locator.count();
-        const exists = count > 0;
+        const searchText = textCheck.text;
+        const exists = await page.evaluate((text: string) => {
+          return document.body.innerText.includes(text);
+        }, searchText).catch(() => false);
         const passed = textCheck.shouldExist ? exists : !exists;
         return {
           step,

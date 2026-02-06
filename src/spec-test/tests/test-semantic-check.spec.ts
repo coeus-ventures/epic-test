@@ -17,14 +17,9 @@ function createMockPage() {
   return {
     url: vi.fn(() => 'http://localhost:3000/app'),
     title: vi.fn(async () => 'Test App'),
-    locator: vi.fn(() => ({
-      count: vi.fn(async () => 0),
-    })),
-    evaluate: vi.fn(async () => []),
-    context: vi.fn(() => ({
-      clearCookies: vi.fn(),
-    })),
+    evaluate: vi.fn(async () => false),
     goto: vi.fn(),
+    reload: vi.fn(),
     waitForLoadState: vi.fn(),
   } as any;
 }
@@ -296,9 +291,8 @@ describe('semantic check: b-test + extract() double-check', () => {
     const stagehand = createMockStagehand({ passed: true });
     const page = createMockPage();
     // Mock locator to find the text
-    page.locator = vi.fn(() => ({
-      count: vi.fn(async () => 1),
-    }));
+    // Mock evaluate to return true (text found on page)
+    page.evaluate = vi.fn(async () => true);
 
     const step = makeSemanticCheckStep('The text "Buy groceries" appears on the page');
     const context = makeContext({ page, stagehand, tester });
