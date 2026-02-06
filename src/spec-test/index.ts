@@ -37,6 +37,7 @@ import type {
   CheckResult,
   FailureContext,
   StepContext,
+  ChainStep,
 } from "./types";
 
 /**
@@ -1007,8 +1008,8 @@ export async function verifyBehaviorWithDependencies(
     const { behavior, scenarioName } = chain[chainIndex];
 
     // Pick scenario by name if specified, otherwise fall back to first example
-    const example = scenarioName
-      ? behavior.examples.find(e => e.name === scenarioName) ?? behavior.examples[0]
+    const example: SpecExample | undefined = scenarioName
+      ? behavior.examples.find((e: SpecExample): boolean => e.name === scenarioName) ?? behavior.examples[0]
       : behavior.examples[0];
     if (!example) {
       return {
@@ -1594,7 +1595,7 @@ function generateSuggestions(
                             errorMessage.includes('schema') ||
                             errorMessage.includes('not found') ||
                             errorMessage.includes('no element');
-  const isTimeout = errorMessage.toLowerCase().includes('timeout') || errorMessage.toLowerCase().includes('timed out');
+  const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('timed out');
   const isPageStateIssue = errorMessage.includes('Unexpected page state') ||
                             errorMessage.includes('login page') ||
                             errorMessage.includes('session may have expired') ||
@@ -1673,7 +1674,7 @@ function generateSuggestions(
 
   if (isTimeout) {
     return [
-      'The operation hit a timeout while waiting for a response',
+      'The operation timed out waiting for a response',
       'The page may be slow to load or unresponsive',
       'Check for JavaScript errors in the application',
       'Consider if the application is properly running',
@@ -2105,12 +2106,19 @@ export class SpecTestRunner {
           }
           try { sessionStorage.clear(); } catch {}
         }, shouldClearLocalStorage);
+
+        // Force page reload after clearing storage to reset SPA state.
+        // Without this, React apps may keep auth state in memory even after
+        // localStorage is cleared, causing the dashboard to persist.
+        if (shouldClearLocalStorage) {
+          await page.reload({ waitUntil: 'domcontentloaded' });
+        }
       } catch {
         // Ignore errors clearing state - page may not be ready yet
       }
 
       // Navigate to base URL (fresh start for each example)
-      await page.goto(this.config.baseUrl);
+      await page.goto(this.config.baseUrl, { waitUntil: 'domcontentloaded' });
 
       // Take initial snapshot - establishes first "before" baseline
       await tester.snapshot(page);
