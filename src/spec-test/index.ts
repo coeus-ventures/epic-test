@@ -1090,12 +1090,14 @@ export async function verifyBehaviorWithDependencies(
     // For chain steps after the first, strip login steps since user is already logged in
     // The first step (usually Sign Up) runs all steps to establish the session
     let stepsToProcess = example.steps;
-    if (!isFirstInChain) {
+    if (isFirstInChain) {
+      console.log(`Chain step [${behavior.id}]: First in chain, clearing session and running ${example.steps.length} steps`);
+    } else {
       stepsToProcess = stripLoginSteps(example.steps);
       if (behavior.pagePath) {
-        console.log(`Chain step [${behavior.id}]: Navigating to ${behavior.pagePath}, stripped ${example.steps.length - stepsToProcess.length} login steps`);
+        console.log(`Chain step [${behavior.id}]: Navigating to ${behavior.pagePath}, stripped ${example.steps.length - stepsToProcess.length} login steps, running ${stepsToProcess.length} steps`);
       } else {
-        console.log(`Chain step [${behavior.id}]: Stripped ${example.steps.length - stepsToProcess.length} login steps`);
+        console.log(`Chain step [${behavior.id}]: Stripped ${example.steps.length - stepsToProcess.length} login steps, running ${stepsToProcess.length} steps`);
       }
     }
 
@@ -2470,14 +2472,18 @@ export class SpecTestRunner {
         : this.config.baseUrl;
 
       // Clear browser state when starting a fresh chain (clearLocalStorage is true).
-      // This prevents session carry-over between chains (e.g., auth flow leaving
-      // user logged in, causing Sign Up in next chain to fail).
-      //
-      // When NOT clearing (e.g., Sign Out after Sign Up), keep the page as-is.
-      // The behavior's steps will handle any navigation needed.
+      // This prevents session carry-over between chains.
       const shouldClearSession = options?.clearLocalStorage !== false;
+
+      // Log navigation/session state for debugging
+      const currentUrl = page.url();
+      console.log(`[runExample] shouldClearSession=${shouldClearSession}, navigateToPath=${options?.navigateToPath ?? '(none)'}, currentUrl=${currentUrl}`);
+
       try {
         if (shouldClearSession) {
+          // Starting a fresh chain - clear everything and navigate
+          console.log(`[runExample] Clearing session and navigating to ${targetUrl}`);
+
           // Navigate to baseUrl first to ensure we're on the correct domain for clearing
           await page.goto(this.config.baseUrl);
 
@@ -2492,14 +2498,25 @@ export class SpecTestRunner {
           // Navigate to targetUrl to force a fresh load with cleared state
           await page.goto(targetUrl);
           await page.waitForLoadState('networkidle');
+        } else if (options?.navigateToPath) {
+          // Not clearing session, but need to navigate to a specific page path
+          // This is for non-first chain steps that need to go to a different page
+          console.log(`[runExample] Navigating to ${targetUrl} (preserving session)`);
+          await page.goto(targetUrl);
+          await page.waitForLoadState('networkidle');
+        } else {
+          // Not clearing session and no specific path - keep page as-is
+          // This is for auth flow steps (Sign Out, Invalid Sign In, Sign In)
+          // where we want to preserve the current page state
+          console.log(`[runExample] Keeping current page state (no navigation)`);
         }
-        // When NOT clearing session, don't navigate - keep current page state.
-        // This preserves auth state between auth flow steps (e.g., Sign Up → Sign Out).
-        // The behavior's steps include navigation if needed.
       } catch (e) {
         // Log errors but continue - navigation may still have succeeded
         console.warn(`Warning: Session clear/navigation issue: ${e instanceof Error ? e.message : String(e)}`);
       }
+
+      // Log page state after navigation/clearing
+      console.log(`[runExample] Page URL after setup: ${page.url()}`);
 
       // Take initial snapshot - establishes first "before" baseline
       await tester.snapshot(page);
