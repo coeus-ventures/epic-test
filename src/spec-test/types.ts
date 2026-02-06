@@ -93,6 +93,8 @@ export interface HarborBehavior {
   dependencies: BehaviorDependency[];
   /** Examples/scenarios with steps */
   examples: SpecExample[];
+  /** Page path where this behavior lives (e.g., "/candidates") */
+  pagePath?: string;
 }
 
 /**

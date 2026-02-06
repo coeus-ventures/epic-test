@@ -289,12 +289,75 @@ function slugify(text: string): string {
 }
 
 /**
+ * Parse the ## Pages section to extract page paths for each behavior.
+ * Returns a Map of behavior ID (slugified) to page path.
+ */
+function parsePagePaths(content: string): Map<string, string> {
+  const pagePaths = new Map<string, string>();
+
+  const pagesMatch = content.match(/^## Pages/im);
+  if (!pagesMatch) {
+    return pagePaths;
+  }
+
+  const pagesStart = pagesMatch.index! + pagesMatch[0].length;
+  const nextH2Match = content.slice(pagesStart).match(/^## [^#]/m);
+  const pagesEnd = nextH2Match ? pagesStart + nextH2Match.index! : content.length;
+  const pagesContent = content.slice(pagesStart, pagesEnd);
+
+  const lines = pagesContent.split('\n');
+  let currentPagePath: string | null = null;
+  let inBehaviorsSection = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Page heading: ### Page Name
+    if (trimmed.startsWith('### ') && !trimmed.startsWith('#### ')) {
+      currentPagePath = null;
+      inBehaviorsSection = false;
+      continue;
+    }
+
+    // Path line: **Path:** `/route`
+    const pathMatch = trimmed.match(/\*\*Path:\*\*\s*`([^`]+)`/);
+    if (pathMatch) {
+      currentPagePath = pathMatch[1];
+      continue;
+    }
+
+    // Behaviors section
+    if (trimmed.toLowerCase() === '#### behaviors') {
+      inBehaviorsSection = true;
+      continue;
+    }
+
+    // Other #### section ends behaviors
+    if (trimmed.startsWith('#### ')) {
+      inBehaviorsSection = false;
+      continue;
+    }
+
+    // Behavior list item
+    if (inBehaviorsSection && currentPagePath && trimmed.startsWith('- ')) {
+      const behaviorTitle = trimmed.slice(2).trim();
+      const behaviorId = slugify(behaviorTitle);
+      pagePaths.set(behaviorId, currentPagePath);
+    }
+  }
+
+  return pagePaths;
+}
+
+/**
  * Parse Harbor format with full behavior definitions including dependencies.
  * Returns a Map of behavior ID to HarborBehavior for efficient chain building.
  */
 export function parseHarborBehaviorsWithDependencies(
   content: string
 ): Map<string, import('./types').HarborBehavior> {
+  // First, parse page paths
+  const pagePaths = parsePagePaths(content);
   const behaviorsMatch = content.match(/^## Behaviors/im);
   if (!behaviorsMatch) {
     return new Map();
@@ -334,12 +397,14 @@ export function parseHarborBehaviorsWithDependencies(
       }
 
       const title = trimmedLine.slice(4).trim();
+      const behaviorId = slugify(title);
       currentBehavior = {
-        id: slugify(title),
+        id: behaviorId,
         title,
         description: '',
         dependencies: [],
         examples: [],
+        pagePath: pagePaths.get(behaviorId),
       };
       currentExample = null;
       collectingSteps = false;
@@ -1006,6 +1071,7 @@ export async function verifyBehaviorWithDependencies(
   // and unique credentials to guarantee the ideal state for the target behavior.
   for (let chainIndex = 0; chainIndex < chain.length; chainIndex++) {
     const { behavior, scenarioName } = chain[chainIndex];
+    const isFirstInChain = chainIndex === 0;
 
     // Pick scenario by name if specified, otherwise fall back to first example
     const example: SpecExample | undefined = scenarioName
@@ -1021,10 +1087,22 @@ export async function verifyBehaviorWithDependencies(
       };
     }
 
+    // For chain steps after the first, strip login steps since user is already logged in
+    // The first step (usually Sign Up) runs all steps to establish the session
+    let stepsToProcess = example.steps;
+    if (!isFirstInChain) {
+      stepsToProcess = stripLoginSteps(example.steps);
+      if (behavior.pagePath) {
+        console.log(`Chain step [${behavior.id}]: Navigating to ${behavior.pagePath}, stripped ${example.steps.length - stepsToProcess.length} login steps`);
+      } else {
+        console.log(`Chain step [${behavior.id}]: Stripped ${example.steps.length - stepsToProcess.length} login steps`);
+      }
+    }
+
     // Process steps with credential injection
     const processedSteps = processStepsWithCredentials(
       behavior,
-      example.steps,
+      stepsToProcess,
       credentialTracker
     );
 
@@ -1036,10 +1114,17 @@ export async function verifyBehaviorWithDependencies(
     // Only clear localStorage for the first step of the chain. Subsequent steps
     // preserve localStorage so that app data (user accounts in SPAs) created by
     // earlier steps (e.g., Sign Up) survives into later steps (e.g., Sign In).
+    //
+    // For non-first chain steps with a page path, we pass the page path to runExample
+    // so it navigates directly to that page instead of the base URL.
+    const navigateToPath = !isFirstInChain && behavior.pagePath ? behavior.pagePath : undefined;
     const exampleToRun = { ...example, steps: processedSteps };
     let result: import('./types').ExampleResult;
     try {
-      result = await runner.runExample(exampleToRun, { clearLocalStorage: chainIndex === 0 });
+      result = await runner.runExample(exampleToRun, {
+        clearLocalStorage: isFirstInChain,
+        navigateToPath,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const behaviorResult: import('./types').BehaviorContext = {
@@ -1142,26 +1227,74 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
 }
 
 /**
+ * Strip login steps from behavior steps.
+ * Used when executing chain steps after the first behavior (user is already logged in).
+ *
+ * Strips:
+ * - Navigate to URL (we'll navigate directly to page path instead)
+ * - Type email into field
+ * - Type password into field
+ * - Click Sign In / Login button
+ *
+ * Keeps:
+ * - All Check steps
+ * - Navigation button clicks (Jobs, Candidates, etc.)
+ * - All other action steps
+ */
+function stripLoginSteps(steps: SpecStep[]): SpecStep[] {
+  return steps.filter(step => {
+    // Always keep check steps
+    if (step.type === 'check') return true;
+
+    const instruction = step.instruction.toLowerCase();
+
+    // Strip navigation to URL
+    if (instruction.includes('navigate to')) {
+      return false;
+    }
+
+    // Strip email/password typing
+    if ((instruction.includes('type') || instruction.includes('enter') || instruction.includes('fill')) &&
+        (instruction.includes('email') || instruction.includes('password'))) {
+      return false;
+    }
+
+    // Strip Sign In / Login button clicks
+    if ((instruction.includes('click') || instruction.includes('press')) &&
+        (instruction.includes('sign in') || instruction.includes('signin') ||
+         instruction.includes('log in') || instruction.includes('login')) &&
+        !instruction.includes('sign out') && !instruction.includes('logout')) {
+      return false;
+    }
+
+    // Keep everything else
+    return true;
+  });
+}
+
+/**
  * Filter steps for Sign Out in auth flow sequence.
  * Since the user is already signed in after Sign Up, we only need to:
  * 1. Click Sign Out button
  * 2. Check sign in form is displayed
  *
- * We strip: Navigate, Type email, Type password, Click Sign In
+ * This is more aggressive than stripLoginSteps - it also removes navigation clicks.
  */
 function filterSignOutStepsForAuthFlow(steps: SpecStep[]): SpecStep[] {
   return steps.filter(step => {
     if (step.type === 'check') return true;
     const instruction = step.instruction.toLowerCase();
-    // Keep only the Sign Out action, skip navigation and login actions
-    if (instruction.includes('sign out') || instruction.includes('signout') || instruction.includes('log out') || instruction.includes('logout')) {
+    // Keep only the Sign Out action
+    if (instruction.includes('sign out') || instruction.includes('signout') ||
+        instruction.includes('log out') || instruction.includes('logout')) {
       return true;
     }
-    // Skip navigation, email, password, and sign in actions
+    // Skip everything else (navigation, login, etc.)
     if (instruction.includes('navigate') ||
         instruction.includes('email') ||
         instruction.includes('password') ||
-        (instruction.includes('sign in') || instruction.includes('signin') || instruction.includes('log in') || instruction.includes('login'))) {
+        instruction.includes('sign in') || instruction.includes('signin') ||
+        instruction.includes('log in') || instruction.includes('login')) {
       return false;
     }
     return true;
@@ -2309,7 +2442,11 @@ export class SpecTestRunner {
    * - Reset + snapshot before each Act (new baseline)
    * - Check steps take "after" snapshot and assert
    */
-  async runExample(example: SpecExample, options?: { clearLocalStorage?: boolean }): Promise<ExampleResult> {
+  async runExample(example: SpecExample, options?: {
+    clearLocalStorage?: boolean;
+    /** Navigate to this path instead of base URL (for chain steps) */
+    navigateToPath?: string;
+  }): Promise<ExampleResult> {
     const startTime = Date.now();
 
     try {
@@ -2345,8 +2482,13 @@ export class SpecTestRunner {
         // Ignore errors clearing state - page may not be ready yet
       }
 
-      // Navigate to base URL (fresh start for each example)
-      await page.goto(this.config.baseUrl);
+      // Navigate to target URL
+      // For chain steps, navigate directly to the behavior's page path
+      // This avoids redundant navigation through the login flow
+      const targetUrl = options?.navigateToPath
+        ? `${this.config.baseUrl.replace(/\/$/, '')}${options.navigateToPath}`
+        : this.config.baseUrl;
+      await page.goto(targetUrl);
 
       // Take initial snapshot - establishes first "before" baseline
       await tester.snapshot(page);
