@@ -1142,14 +1142,44 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
 }
 
 /**
+ * Filter steps for Sign Out in auth flow sequence.
+ * Since the user is already signed in after Sign Up, we only need to:
+ * 1. Click Sign Out button
+ * 2. Check sign in form is displayed
+ *
+ * We strip: Navigate, Type email, Type password, Click Sign In
+ */
+function filterSignOutStepsForAuthFlow(steps: SpecStep[]): SpecStep[] {
+  return steps.filter(step => {
+    if (step.type === 'check') return true;
+    const instruction = step.instruction.toLowerCase();
+    // Keep only the Sign Out action, skip navigation and login actions
+    if (instruction.includes('sign out') || instruction.includes('signout') || instruction.includes('log out') || instruction.includes('logout')) {
+      return true;
+    }
+    // Skip navigation, email, password, and sign in actions
+    if (instruction.includes('navigate') ||
+        instruction.includes('email') ||
+        instruction.includes('password') ||
+        (instruction.includes('sign in') || instruction.includes('signin') || instruction.includes('log in') || instruction.includes('login'))) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
  * Execute a single behavior directly (no dependency chain).
  * Used for the special auth flow where behaviors run in a specific sequence.
+ *
+ * @param isSignOutAfterSignUp - If true, strips login steps from Sign Out since user is already signed in
  */
 async function executeBehaviorDirectly(
   behavior: import('./types').HarborBehavior,
   runner: any,
   credentialTracker: CredentialTracker,
-  clearLocalStorage: boolean = true
+  clearLocalStorage: boolean = true,
+  isSignOutAfterSignUp: boolean = false
 ): Promise<import('./types').BehaviorContext> {
   const startTime = Date.now();
 
@@ -1164,8 +1194,15 @@ async function executeBehaviorDirectly(
     };
   }
 
+  // Get steps, filtering for Sign Out if needed
+  let stepsToProcess = example.steps;
+  if (isSignOutAfterSignUp && (behavior.id.includes('sign-out') || behavior.id.includes('signout'))) {
+    stepsToProcess = filterSignOutStepsForAuthFlow(example.steps);
+    console.log(`Auth flow [${behavior.id}]: Filtered to ${stepsToProcess.length} steps (stripped login steps since user is already signed in)`);
+  }
+
   // Process steps with credential handling
-  const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker);
+  const processedSteps = processStepsWithCredentials(behavior, stepsToProcess, credentialTracker);
 
   // Log credential state for diagnostics
   const creds = credentialTracker.getCredentials();
@@ -1276,8 +1313,11 @@ async function runAuthBehaviorsSequence(
     }
 
     try {
+      // Sign Out runs after Sign Up, so user is already signed in - strip login steps
+      const isSignOutAfterSignUp = behavior.id.includes('sign-out') || behavior.id.includes('signout');
+
       const result = await withTimeout(
-        executeBehaviorDirectly(behavior, runner, credentialTracker, clearLocalStorage),
+        executeBehaviorDirectly(behavior, runner, credentialTracker, clearLocalStorage, isSignOutAfterSignUp),
         behaviorTimeoutMs,
         `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
       );
