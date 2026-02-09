@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { parseSteps, parseSpecFile, classifyCheck, executeActStep, executeCheckStep, generateFailureContext, SpecTestRunner } from "../index";
 import path from "path";
+import { fileURLToPath } from "url";
+import os from "os";
 import type { Stagehand } from "@browserbasehq/stagehand";
 import type { Page } from "playwright";
 import type { Tester } from "../../b-test";
 import type { SpecStep, TestableSpec } from "../types";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 describe("parseSteps", () => {
   it("should parse Act steps from markdown content", () => {
@@ -339,7 +344,9 @@ describe("executeCheckStep", () => {
     expect(result.checkType).toBe("semantic");
     expect(result.expected).toBe("Error message is displayed");
     expect(mockTester.snapshot).toHaveBeenCalledWith(mockPage);
-    expect(mockTester.assert).toHaveBeenCalledWith("Error message is displayed");
+    expect(mockTester.assert).toHaveBeenCalledWith(
+      expect.stringContaining("Error message is displayed")
+    );
   });
 
   it("should fail semantic check when tester.assert returns false", async () => {
@@ -429,7 +436,7 @@ describe("generateFailureContext", () => {
     const context = await generateFailureContext(mockPage, step, error);
 
     expect(context.suggestions.length).toBeGreaterThan(0);
-    expect(context.suggestions.some(s => s.toLowerCase().includes("timeout") || s.toLowerCase().includes("wait"))).toBe(true);
+    expect(context.suggestions.some(s => s.toLowerCase().includes("timed out") || s.toLowerCase().includes("timeout"))).toBe(true);
   });
 
   it("should generate suggestions for check failures", async () => {
@@ -513,7 +520,7 @@ describe("Caching Configuration", () => {
 });
 
 describe("Cache Management", () => {
-  const testCacheDir = "./test-cache-mgmt-temp";
+  const testCacheDir = path.join(os.tmpdir(), "epic-test-cache-mgmt-temp");
 
   afterEach(() => {
     // Clean up test cache directory

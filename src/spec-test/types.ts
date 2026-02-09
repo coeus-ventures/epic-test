@@ -276,6 +276,14 @@ export interface FailureContext {
   suggestions: string[];
 }
 
+/** Interface for runner objects used by orchestrators. */
+export interface BehaviorRunner {
+  runExample(example: SpecExample, options?: {
+    clearSession?: boolean;
+    navigateToPath?: string;
+  }): Promise<ExampleResult>;
+}
+
 /**
  * Context passed to step execution
  */
@@ -295,5 +303,5 @@ export interface StepContext {
   /** Current behavior ID (for credential tracking) */
   currentBehaviorId?: string;
   /** Credential tracker (for Sign Up/Sign In) */
-  credentialTracker?: import('./index').CredentialTracker;
+  credentialTracker?: import('./credential-tracker').CredentialTracker;
 }
