@@ -55,9 +55,9 @@ const DIRECTORY_PATTERN = /^Directory:\s*`([^`]+)`/m;
  * 3. Legacy fallback: treat entire content as single example
  */
 export function parseExamples(content: string): SpecExample[] {
-  const examplesMatch = content.match(/^## (?:Scenarios|Examples)\s*$/m);
-  if (examplesMatch) {
-    return parseEpicExamples(content, examplesMatch);
+  const epicSection = extractSection(content, /^## (?:Scenarios|Examples)\s*$/m);
+  if (epicSection) {
+    return parseExamplesSection(epicSection.body, "###", "####", epicSection.lineOffset);
   }
 
   const behaviorsMatch = content.match(/^## Behaviors\s*$/m);
@@ -78,27 +78,27 @@ export function parseExamples(content: string): SpecExample[] {
   return [];
 }
 
-/**
- * Parse Epic format: ## Scenarios/Examples -> ### Scenario -> #### Steps
- */
-function parseEpicExamples(content: string, match: RegExpMatchArray): SpecExample[] {
-  const examplesStart = match.index! + match[0].length;
-  const nextH2Match = content.slice(examplesStart).match(/^## [^#]/m);
-  const examplesEnd = nextH2Match
-    ? examplesStart + nextH2Match.index!
-    : content.length;
-
-  const examplesContent = content.slice(examplesStart, examplesEnd);
-  const lineOffset = content.slice(0, examplesStart).split('\n').length;
-  return parseExamplesSection(examplesContent, "###", "####", lineOffset);
-}
-
 /** Convert title to slug (same as Python slugify) */
 function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+/** Extract a markdown section by H2 heading, returning its body, lines, and line offset. */
+function extractSection(
+  content: string, headingPattern: RegExp
+): { body: string; lines: string[]; lineOffset: number } | null {
+  const match = content.match(headingPattern);
+  if (!match) return null;
+
+  const start = match.index! + match[0].length;
+  const nextH2 = content.slice(start).match(/^## [^#]/m);
+  const end = nextH2 ? start + nextH2.index! : content.length;
+  const body = content.slice(start, end);
+
+  return { body, lines: body.split("\n"), lineOffset: content.slice(0, start).split('\n').length };
 }
 
 /**
@@ -117,19 +117,13 @@ function slugify(text: string): string {
 function parsePagePaths(content: string): Map<string, string> {
   const pagePaths = new Map<string, string>();
 
-  const pagesMatch = content.match(/^## Pages/im);
-  if (!pagesMatch) return pagePaths;
+  const section = extractSection(content, /^## Pages/im);
+  if (!section) return pagePaths;
 
-  const pagesStart = pagesMatch.index! + pagesMatch[0].length;
-  const nextH2Match = content.slice(pagesStart).match(/^## [^#]/m);
-  const pagesEnd = nextH2Match ? pagesStart + nextH2Match.index! : content.length;
-  const pagesContent = content.slice(pagesStart, pagesEnd);
-
-  const lines = pagesContent.split('\n');
   let currentPagePath: string | null = null;
   let inBehaviorsSection = false;
 
-  for (const line of lines) {
+  for (const line of section.lines) {
     const trimmed = line.trim();
 
     // Page heading: ### Page Name
@@ -168,6 +162,16 @@ function parsePagePaths(content: string): Map<string, string> {
   return pagePaths;
 }
 
+/** Parser state for content collection within a behavior. */
+type ParserMode = 'idle' | 'dependencies' | 'steps';
+
+/** Push current example onto behavior if it has steps. */
+function flushExample(example: SpecExample | null, behavior: HarborBehavior): void {
+  if (example && example.steps.length > 0) {
+    behavior.examples.push(example);
+  }
+}
+
 /** Save current example to behavior, then behavior to the map. */
 function saveBehavior(
   currentBehavior: HarborBehavior | null,
@@ -175,9 +179,7 @@ function saveBehavior(
   behaviors: Map<string, HarborBehavior>
 ): void {
   if (!currentBehavior) return;
-  if (currentExample && currentExample.steps.length > 0) {
-    currentBehavior.examples.push(currentExample);
-  }
+  flushExample(currentExample, currentBehavior);
   behaviors.set(currentBehavior.id, currentBehavior);
 }
 
@@ -214,6 +216,51 @@ function parseStepLine(trimmedLine: string, example: SpecExample, lineNumber: nu
   return true;
 }
 
+/** Finalize previous behavior (if any) and create a new one from a ### heading. */
+function startNewBehavior(
+  trimmedLine: string,
+  pagePaths: Map<string, string>,
+  currentBehavior: HarborBehavior | null,
+  currentExample: SpecExample | null,
+  behaviors: Map<string, HarborBehavior>,
+): HarborBehavior {
+  saveBehavior(currentBehavior, currentExample, behaviors);
+  const title = trimmedLine.slice(4).trim();
+  const id = slugify(title);
+  return {
+    id, title, description: '', dependencies: [],
+    examples: [], pagePath: pagePaths.get(id),
+  };
+}
+
+/** Dispatch an #### heading, returning new parser state or null if not an H4. */
+function handleH4Heading(
+  trimmedLine: string,
+  behavior: HarborBehavior,
+  currentExample: SpecExample | null,
+): { mode: ParserMode; inExamples: boolean; example: SpecExample | null } | null {
+  if (!trimmedLine.startsWith("#### ") || trimmedLine.startsWith("#####")) return null;
+
+  if (/^#### Dependencies/i.test(trimmedLine)) {
+    return { mode: 'dependencies', inExamples: false, example: currentExample };
+  }
+
+  if (/^#### Steps/i.test(trimmedLine)) {
+    flushExample(currentExample, behavior);
+    const nameMatch = trimmedLine.match(/^#### Steps\s*(?:\(([^)]+)\))?/i);
+    const exampleName = nameMatch?.[1]?.trim() || behavior.title;
+    return { mode: 'steps', inExamples: false, example: { name: exampleName, steps: [] } };
+  }
+
+  if (/^#### (?:Scenarios|Examples)/i.test(trimmedLine)) {
+    return { mode: 'idle', inExamples: true, example: currentExample };
+  }
+
+  // Other #### section — flush and reset
+  flushExample(currentExample, behavior);
+  return { mode: 'idle', inExamples: false, example: null };
+}
+
 /**
  * Parse Harbor format with full behavior definitions including dependencies.
  * Returns a Map of behavior ID to HarborBehavior.
@@ -222,129 +269,52 @@ export function parseHarborBehaviorsWithDependencies(
   content: string
 ): Map<string, HarborBehavior> {
   const pagePaths = parsePagePaths(content);
-
-  const behaviorsMatch = content.match(/^## Behaviors/im);
-  if (!behaviorsMatch) return new Map();
-
-  const behaviorsStart = behaviorsMatch.index! + behaviorsMatch[0].length;
-  const nextH2Match = content.slice(behaviorsStart).match(/^## [^#]/m);
-  const behaviorsEnd = nextH2Match
-    ? behaviorsStart + nextH2Match.index!
-    : content.length;
-
-  const behaviorsContent = content.slice(behaviorsStart, behaviorsEnd);
-  const lines = behaviorsContent.split("\n");
-  const lineOffset = content.slice(0, behaviorsStart).split('\n').length;
-
+  const section = extractSection(content, /^## Behaviors/im);
+  if (!section) return new Map();
   const behaviors = new Map<string, HarborBehavior>();
   let currentBehavior: HarborBehavior | null = null;
   let currentExample: SpecExample | null = null;
-  let collectingSteps = false;
-  let collectingDependencies = false;
-  let inExamplesSection = false;
+  let mode: ParserMode = 'idle';
+  let inExamples = false;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmedLine = line.trim();
-    const lineNumber = lineOffset + i + 1;
-
-    // New behavior: ### Behavior Name
+  for (let i = 0; i < section.lines.length; i++) {
+    const trimmedLine = section.lines[i].trim();
+    const lineNumber = section.lineOffset + i + 1;
+    // ### Behavior boundary
     if (trimmedLine.startsWith("### ") && !trimmedLine.startsWith("#### ")) {
-      saveBehavior(currentBehavior, currentExample, behaviors);
-
-      const title = trimmedLine.slice(4).trim();
-      const behaviorId = slugify(title);
-      currentBehavior = {
-        id: behaviorId, title, description: '', dependencies: [],
-        examples: [], pagePath: pagePaths.get(behaviorId),
-      };
+      currentBehavior = startNewBehavior(trimmedLine, pagePaths, currentBehavior, currentExample, behaviors);
       currentExample = null;
-      collectingSteps = false;
-      collectingDependencies = false;
-      inExamplesSection = false;
+      mode = 'idle';
+      inExamples = false;
       continue;
     }
-
     if (!currentBehavior) continue;
+    // #### Heading dispatch
+    const h4 = handleH4Heading(trimmedLine, currentBehavior, currentExample);
+    if (h4) { mode = h4.mode; inExamples = h4.inExamples; currentExample = h4.example; continue; }
 
-    // #### Dependencies section
-    if (/^#### Dependencies/i.test(trimmedLine) && !trimmedLine.startsWith("#####")) {
-      collectingDependencies = true;
-      collectingSteps = false;
-      inExamplesSection = false;
-      continue;
-    }
-
-    // Parse dependency lines
-    if (collectingDependencies && trimmedLine) {
-      if (parseDependencyLine(trimmedLine, currentBehavior)) continue;
-    }
-
-    // #### Steps (simple format)
-    if (/^#### Steps/i.test(trimmedLine) && !trimmedLine.startsWith("#####")) {
-      collectingDependencies = false;
-      if (currentExample && currentExample.steps.length > 0) {
-        currentBehavior.examples.push(currentExample);
-      }
-      const nameMatch = trimmedLine.match(/^#### Steps\s*(?:\(([^)]+)\))?/i);
-      const exampleName = nameMatch?.[1]?.trim() || currentBehavior.title;
-      currentExample = { name: exampleName, steps: [] };
-      collectingSteps = true;
-      inExamplesSection = false;
-      continue;
-    }
-
-    // #### Scenarios or #### Examples (nested format)
-    if (/^#### (?:Scenarios|Examples)/i.test(trimmedLine)) {
-      collectingDependencies = false;
-      inExamplesSection = true;
-      collectingSteps = false;
-      continue;
-    }
-
-    // Other #### sections
-    if (trimmedLine.startsWith("#### ") && !trimmedLine.startsWith("#####")) {
-      collectingDependencies = false;
-      if (currentExample && currentExample.steps.length > 0) {
-        currentBehavior.examples.push(currentExample);
-        currentExample = null;
-      }
-      collectingSteps = false;
-      inExamplesSection = false;
-      continue;
-    }
-
-    // ##### Example Name
-    if (inExamplesSection && trimmedLine.startsWith("##### ") && !trimmedLine.startsWith("######")) {
-      if (currentExample && currentExample.steps.length > 0) {
-        currentBehavior.examples.push(currentExample);
-      }
+    // ##### Example heading (within examples section)
+    if (inExamples && trimmedLine.startsWith("##### ") && !trimmedLine.startsWith("######")) {
+      flushExample(currentExample, currentBehavior);
       currentExample = { name: trimmedLine.slice(6).trim(), steps: [] };
-      collectingSteps = false;
+      mode = 'idle';
       continue;
     }
-
     // ###### Steps
-    if (/^###### Steps/i.test(trimmedLine)) {
-      collectingSteps = true;
-      continue;
-    }
-
-    // Parse step lines
-    if (collectingSteps && currentExample && trimmedLine.startsWith("* ")) {
+    if (/^###### Steps/i.test(trimmedLine)) { mode = 'steps'; continue; }
+    // Content: dependency lines
+    if (mode === 'dependencies' && trimmedLine && parseDependencyLine(trimmedLine, currentBehavior)) continue;
+    // Content: step lines
+    if (mode === 'steps' && currentExample && trimmedLine.startsWith("* ")) {
       parseStepLine(trimmedLine, currentExample, lineNumber);
     }
-
-    // Collect description (first non-heading, non-empty line before any H4)
-    if (!collectingDependencies && !collectingSteps && !inExamplesSection &&
+    // Content: description (first text line in idle mode, outside examples)
+    if (mode === 'idle' && !inExamples &&
         !trimmedLine.startsWith("#") && trimmedLine && !currentBehavior.description) {
       currentBehavior.description = trimmedLine;
     }
   }
-
-  // Save last behavior
   saveBehavior(currentBehavior, currentExample, behaviors);
-
   return behaviors;
 }
 
