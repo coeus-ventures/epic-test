@@ -319,6 +319,27 @@ export function isNavigationAction(instruction: string): string | null {
   return null;
 }
 
+/**
+ * Detect if a failed act step is a UI navigation action that may be redundant.
+ * Returns the target page name (lowercased) if the instruction looks like "Click X in the navigation/sidebar/menu",
+ * or null if it doesn't match the pattern.
+ */
+export function extractNavigationTarget(instruction: string): string | null {
+  // Pattern: "Click [the] X [button/link/tab/item] in [the] navigation/sidebar/menu/nav bar"
+  const navMatch = instruction.match(
+    /click\s+(?:the\s+)?["']?([^"']+?)["']?\s+(?:button\s+|link\s+|tab\s+|item\s+)?in\s+(?:the\s+)?(?:navigation|sidebar|menu|nav\s*bar|left\s*panel|header)/i
+  );
+  if (navMatch) return navMatch[1].trim().toLowerCase();
+
+  // Pattern: "Navigate/Go to [the] X page"
+  const pageMatch = instruction.match(
+    /(?:navigate|go)\s+to\s+(?:the\s+)?(\w+)\s+(?:page|section|tab|view)/i
+  );
+  if (pageMatch) return pageMatch[1].trim().toLowerCase();
+
+  return null;
+}
+
 /** Check if instruction is a page refresh action. */
 export function isRefreshAction(instruction: string): boolean {
   return /refresh\s+(?:the\s+)?page|reload\s+(?:the\s+)?page|^refresh$|^reload$/i.test(instruction);

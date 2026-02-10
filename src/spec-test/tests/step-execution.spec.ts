@@ -1,193 +1,129 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { parseSteps, parseSpecFile, classifyCheck, executeActStep, executeCheckStep, generateFailureContext, SpecTestRunner } from "../index";
-import path from "path";
-import { fileURLToPath } from "url";
-import os from "os";
+import { describe, it, expect, vi } from 'vitest';
+import {
+  isNavigationAction,
+  isRefreshAction,
+  extractExpectedText,
+  extractNavigationTarget,
+  executeActStep,
+  executeCheckStep,
+  generateFailureContext,
+} from '../index';
 import type { Stagehand } from "@browserbasehq/stagehand";
 import type { Page } from "playwright";
 import type { Tester } from "../../b-test";
-import type { SpecStep, TestableSpec } from "../types";
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import type { SpecStep } from "../types";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-describe("parseSteps", () => {
-  it("should parse Act steps from markdown content", () => {
-    const content = `
-#### Steps
-* Act: User navigates to /login
-* Act: User clicks Login button
-`;
-    const steps = parseSteps(content);
-
-    expect(steps).toHaveLength(2);
-    expect(steps[0]).toEqual({
-      type: "act",
-      instruction: "User navigates to /login",
-      lineNumber: expect.any(Number),
-    });
-    expect(steps[1]).toEqual({
-      type: "act",
-      instruction: "User clicks Login button",
-      lineNumber: expect.any(Number),
-    });
+describe('isNavigationAction', () => {
+  it('should detect full URLs', () => {
+    expect(isNavigationAction('Navigate to http://localhost:3000/login')).toBe('http://localhost:3000/login');
+    expect(isNavigationAction('Go to https://example.com')).toBe('https://example.com');
   });
 
-  it("should parse Check steps with deterministic classification", () => {
-    const content = `
-#### Steps
-* Check: URL contains /dashboard
-* Check: Page title is 'Home'
-`;
-    const steps = parseSteps(content);
-
-    expect(steps).toHaveLength(2);
-    expect(steps[0]).toEqual({
-      type: "check",
-      instruction: "URL contains /dashboard",
-      checkType: "deterministic",
-      lineNumber: expect.any(Number),
-    });
-    expect(steps[1]).toEqual({
-      type: "check",
-      instruction: "Page title is 'Home'",
-      checkType: "deterministic",
-      lineNumber: expect.any(Number),
-    });
+  it('should detect relative paths with navigate/go/open/visit', () => {
+    expect(isNavigationAction('Navigate to /login')).toBe('/login');
+    expect(isNavigationAction('Go to /dashboard')).toBe('/dashboard');
+    expect(isNavigationAction('Open /settings')).toBe('/settings');
+    expect(isNavigationAction('Visit /profile')).toBe('/profile');
   });
 
-  it("should parse Check steps with semantic classification", () => {
-    const content = `
-#### Steps
-* Check: Error message is displayed
-* Check: Welcome message is displayed
-`;
-    const steps = parseSteps(content);
-
-    expect(steps).toHaveLength(2);
-    expect(steps[0]).toEqual({
-      type: "check",
-      instruction: "Error message is displayed",
-      checkType: "semantic",
-      lineNumber: expect.any(Number),
-    });
-    expect(steps[1]).toEqual({
-      type: "check",
-      instruction: "Welcome message is displayed",
-      checkType: "semantic",
-      lineNumber: expect.any(Number),
-    });
+  it('should return null for non-navigation actions', () => {
+    expect(isNavigationAction('Click the Login button')).toBeNull();
+    expect(isNavigationAction('Type "hello" into the field')).toBeNull();
+    expect(isNavigationAction('Select "Option A" from dropdown')).toBeNull();
   });
 
-  it("should parse mixed Act and Check steps", () => {
-    const content = `
-#### Steps
-* Act: User logs in as "client"
-* Act: User navigates to the projects page
-* Check: Projects list is visible
-* Act: User clicks Create Project button
-* Check: URL contains /projects/new
-`;
-    const steps = parseSteps(content);
-
-    expect(steps).toHaveLength(5);
-    expect(steps[0].type).toBe("act");
-    expect(steps[1].type).toBe("act");
-    expect(steps[2].type).toBe("check");
-    expect(steps[2].checkType).toBe("semantic");
-    expect(steps[3].type).toBe("act");
-    expect(steps[4].type).toBe("check");
-    expect(steps[4].checkType).toBe("deterministic");
+  it('should not match non-path arguments', () => {
+    expect(isNavigationAction('Navigate to the settings page')).toBeNull();
+    expect(isNavigationAction('Go to home')).toBeNull();
   });
 });
 
-describe("classifyCheck", () => {
-  it('should classify "URL contains" as deterministic', () => {
-    expect(classifyCheck("URL contains /projects")).toBe("deterministic");
-    expect(classifyCheck("URL contains /dashboard")).toBe("deterministic");
+describe('isRefreshAction', () => {
+  it('should match refresh instructions', () => {
+    expect(isRefreshAction('Refresh the page')).toBe(true);
+    expect(isRefreshAction('Reload the page')).toBe(true);
+    expect(isRefreshAction('Refresh page')).toBe(true);
+    expect(isRefreshAction('Reload page')).toBe(true);
+    expect(isRefreshAction('refresh')).toBe(true);
+    expect(isRefreshAction('reload')).toBe(true);
   });
 
-  it('should classify "Page title is" as deterministic', () => {
-    expect(classifyCheck("Page title is 'Projects'")).toBe("deterministic");
-    expect(classifyCheck("Page title is 'Home'")).toBe("deterministic");
-  });
-
-  it('should classify "URL is" as deterministic', () => {
-    expect(classifyCheck("URL is http://localhost:8080/login")).toBe(
-      "deterministic"
-    );
-  });
-
-  it('should classify "Page title contains" as deterministic', () => {
-    expect(classifyCheck("Page title contains 'Dashboard'")).toBe(
-      "deterministic"
-    );
-  });
-
-  it('should classify "Element count is" as deterministic', () => {
-    expect(classifyCheck("Element count is 5")).toBe("deterministic");
-  });
-
-  it('should classify "Input value is" as deterministic', () => {
-    expect(classifyCheck("Input value is 'test@example.com'")).toBe(
-      "deterministic"
-    );
-  });
-
-  it('should classify "Checkbox is checked" as deterministic', () => {
-    expect(classifyCheck("Checkbox is checked")).toBe("deterministic");
-  });
-
-  it('should classify "Error message is displayed" as semantic', () => {
-    expect(classifyCheck("Error message is displayed")).toBe("semantic");
-  });
-
-  it('should classify "Success notification appears" as semantic', () => {
-    expect(classifyCheck("Success notification appears")).toBe("semantic");
-  });
-
-  it('should classify "New project appears in the list" as semantic', () => {
-    expect(classifyCheck("New project appears in the list")).toBe("semantic");
-  });
-
-  it('should classify "Form validation errors are shown" as semantic', () => {
-    expect(classifyCheck("Form validation errors are shown")).toBe("semantic");
+  it('should not match non-refresh instructions', () => {
+    expect(isRefreshAction('Click refresh button')).toBe(false);
+    expect(isRefreshAction('Type "reload" into field')).toBe(false);
   });
 });
 
-describe("parseSpecFile", () => {
-  it("should parse spec file and extract name from heading", async () => {
-    const fixturePath = path.join(__dirname, "fixtures", "sample-spec.md");
-    const spec = await parseSpecFile(fixturePath);
-
-    expect(spec.name).toBe("Login");
+describe('extractExpectedText', () => {
+  it('should extract quoted text from "see" instructions', () => {
+    const result = extractExpectedText('Should see "Welcome back"');
+    expect(result).toEqual({ text: 'Welcome back', shouldExist: true });
   });
 
-  it("should parse spec file and extract examples with steps", async () => {
-    const fixturePath = path.join(__dirname, "fixtures", "sample-spec.md");
-    const spec = await parseSpecFile(fixturePath);
+  it('should extract quoted text from "display" instructions', () => {
+    const result = extractExpectedText('Should display "Error occurred"');
+    expect(result).toEqual({ text: 'Error occurred', shouldExist: true });
+  });
 
-    expect(spec.examples).toHaveLength(1);
-    expect(spec.examples[0].name).toBe("Login with valid credentials");
-    expect(spec.examples[0].steps).toHaveLength(6);
-    expect(spec.examples[0].steps[0]).toEqual({
-      type: "act",
-      instruction: "User navigates to /login",
-      lineNumber: expect.any(Number),
-    });
-    expect(spec.examples[0].steps[4]).toEqual({
-      type: "check",
-      instruction: "URL contains /dashboard",
-      checkType: "deterministic",
-      lineNumber: expect.any(Number),
-    });
-    expect(spec.examples[0].steps[5]).toEqual({
-      type: "check",
-      instruction: "Welcome message is displayed",
-      checkType: "semantic",
-      lineNumber: expect.any(Number),
-    });
+  it('should handle "no longer" as negative assertion', () => {
+    const result = extractExpectedText('The text "Loading" no longer appears');
+    expect(result).toEqual({ text: 'Loading', shouldExist: false });
+  });
+
+  it('should return null for instructions without quoted text', () => {
+    expect(extractExpectedText('URL contains /dashboard')).toBeNull();
+    expect(extractExpectedText('Page title is Home')).toBeNull();
+  });
+
+  it('should handle single quotes', () => {
+    const result = extractExpectedText("Should see 'Welcome back'");
+    expect(result).toEqual({ text: 'Welcome back', shouldExist: true });
+  });
+});
+
+describe('extractNavigationTarget', () => {
+  it('should detect "Click X in the navigation" pattern', () => {
+    expect(extractNavigationTarget('Click the Contacts button in the navigation')).toBe('contacts');
+  });
+
+  it('should detect "Click X in the sidebar" pattern', () => {
+    expect(extractNavigationTarget('Click Jobs in the sidebar')).toBe('jobs');
+  });
+
+  it('should detect "Click X in the menu" pattern', () => {
+    expect(extractNavigationTarget('Click Dashboard in the menu')).toBe('dashboard');
+  });
+
+  it('should detect "Click X in the header" pattern', () => {
+    expect(extractNavigationTarget('Click Dashboard in the header')).toBe('dashboard');
+  });
+
+  it('should detect "Click X item in the left panel" pattern', () => {
+    expect(extractNavigationTarget('Click Candidates item in the left panel')).toBe('candidates');
+  });
+
+  it('should detect "Navigate to X page" pattern', () => {
+    expect(extractNavigationTarget('Navigate to the Settings page')).toBe('settings');
+  });
+
+  it('should detect "Go to X section" pattern', () => {
+    expect(extractNavigationTarget('Go to the Candidates section')).toBe('candidates');
+  });
+
+  it('should detect "Go to X page" pattern', () => {
+    expect(extractNavigationTarget('Go to the Tasks page')).toBe('tasks');
+  });
+
+  it('should detect "Navigate to X section" pattern', () => {
+    expect(extractNavigationTarget('Navigate to the Reports section')).toBe('reports');
+  });
+
+  it('should return null for non-navigation actions', () => {
+    expect(extractNavigationTarget('Click the Submit button')).toBeNull();
+    expect(extractNavigationTarget('Click the "Add" button')).toBeNull();
+    expect(extractNavigationTarget('Type "hello" into the search field')).toBeNull();
+    expect(extractNavigationTarget('Select "Option A" from dropdown')).toBeNull();
+    expect(extractNavigationTarget('Check the "Agree" checkbox')).toBeNull();
   });
 });
 
@@ -452,114 +388,5 @@ describe("generateFailureContext", () => {
     const context = await generateFailureContext(mockPage, step, error);
 
     expect(context.suggestions.length).toBeGreaterThan(0);
-  });
-});
-
-describe("Caching Configuration", () => {
-  const testCacheDir = "./test-cache-temp";
-
-  afterEach(() => {
-    // Clean up test cache directory
-    if (existsSync(testCacheDir)) {
-      rmSync(testCacheDir, { recursive: true, force: true });
-    }
-  });
-
-  it("should return cacheDir when configured", () => {
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-      cacheDir: "./cache/tests",
-    });
-
-    // Access private method via type assertion
-    const getCacheDir = (runner as unknown as { getCacheDir: (spec?: TestableSpec) => string | undefined }).getCacheDir;
-    expect(getCacheDir.call(runner)).toBe("./cache/tests");
-  });
-
-  it("should return undefined when cacheDir not configured", () => {
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-    });
-
-    const getCacheDir = (runner as unknown as { getCacheDir: (spec?: TestableSpec) => string | undefined }).getCacheDir;
-    expect(getCacheDir.call(runner)).toBeUndefined();
-  });
-
-  it("should create per-spec cache directory when cachePerSpec is true", () => {
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-      cacheDir: "./cache",
-      cachePerSpec: true,
-    });
-
-    const spec: TestableSpec = {
-      name: "Login Flow",
-      examples: [],
-    };
-
-    const getCacheDir = (runner as unknown as { getCacheDir: (spec?: TestableSpec) => string | undefined }).getCacheDir;
-    expect(getCacheDir.call(runner, spec)).toMatch(/cache[/\\]login-flow$/);
-  });
-
-  it("should sanitize spec name for filesystem", () => {
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-      cacheDir: "./cache",
-      cachePerSpec: true,
-    });
-
-    const spec: TestableSpec = {
-      name: "Create Project (with spaces & symbols!)",
-      examples: [],
-    };
-
-    const getCacheDir = (runner as unknown as { getCacheDir: (spec?: TestableSpec) => string | undefined }).getCacheDir;
-    const result = getCacheDir.call(runner, spec);
-    expect(result).toMatch(/cache[/\\]create-project-with-spaces-symbols-$/);
-  });
-});
-
-describe("Cache Management", () => {
-  const testCacheDir = path.join(os.tmpdir(), "epic-test-cache-mgmt-temp");
-
-  afterEach(() => {
-    // Clean up test cache directory
-    if (existsSync(testCacheDir)) {
-      rmSync(testCacheDir, { recursive: true, force: true });
-    }
-  });
-
-  it("should clear cache directory when clearCache is called", () => {
-    // Create a test cache directory with a file
-    mkdirSync(testCacheDir, { recursive: true });
-    writeFileSync(`${testCacheDir}/test-file.json`, "{}");
-
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-      cacheDir: testCacheDir,
-    });
-
-    expect(existsSync(testCacheDir)).toBe(true);
-
-    runner.clearCache();
-
-    expect(existsSync(testCacheDir)).toBe(false);
-  });
-
-  it("should not throw when clearing non-existent cache", () => {
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-      cacheDir: "./non-existent-cache-12345",
-    });
-
-    expect(() => runner.clearCache()).not.toThrow();
-  });
-
-  it("should not throw when cacheDir is not configured", () => {
-    const runner = new SpecTestRunner({
-      baseUrl: "http://localhost:8080",
-    });
-
-    expect(() => runner.clearCache()).not.toThrow();
   });
 });

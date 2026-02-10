@@ -75,6 +75,7 @@ export async function verifyBehaviorWithDependencies(
       result = await runner.runExample(exampleToRun, {
         clearSession: isFirstInChain,
         navigateToPath,
+        credentials: credentialTracker.getCredentials(),
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

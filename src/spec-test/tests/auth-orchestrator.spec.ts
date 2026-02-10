@@ -127,17 +127,14 @@ describe('runAuthBehaviorsSequence', () => {
     expect(results[2].behaviorId).toBe('invalid-sign-in');
     expect(results[3].behaviorId).toBe('sign-in');
 
-    // All should pass
     expect(results.every(r => r.status === 'pass')).toBe(true);
 
-    // Runner called 4 times (once per auth behavior)
     expect(runner.runExample).toHaveBeenCalledTimes(4);
 
-    // First call should have clearSession=true, rest false
-    expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true });
-    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false });
-    expect(runner.runExample.mock.calls[2][1]).toEqual({ clearSession: false });
-    expect(runner.runExample.mock.calls[3][1]).toEqual({ clearSession: false });
+    expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true, reloadPage: false });
+    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: false });
+    expect(runner.runExample.mock.calls[2][1]).toEqual({ clearSession: false, reloadPage: false });
+    expect(runner.runExample.mock.calls[3][1]).toEqual({ clearSession: false, reloadPage: true });
   });
 
   it('should skip subsequent auth behaviors when sign-up fails', async () => {
@@ -148,7 +145,7 @@ describe('runAuthBehaviorsSequence', () => {
 
     const context = new VerificationContext();
     const credentialTracker = new CredentialTracker();
-    const runner = createMockRunner(false); // Sign Up will fail
+    const runner = createMockRunner(false);
 
     const results = await runAuthBehaviorsSequence(
       behaviors, context, credentialTracker, runner, 60000
@@ -161,7 +158,6 @@ describe('runAuthBehaviorsSequence', () => {
     expect(results[1].failedDependency).toBe('Sign Up');
     expect(results[2].status).toBe('dependency_failed');
 
-    // Only sign-up was actually executed
     expect(runner.runExample).toHaveBeenCalledTimes(1);
   });
 
@@ -190,7 +186,6 @@ describe('runAuthBehaviorsSequence', () => {
     const credentialTracker = new CredentialTracker();
     const runner = {
       runExample: vi.fn(async () => {
-        // Simulate a slow behavior
         await new Promise(resolve => setTimeout(resolve, 200));
         return {
           example: { name: 'test', steps: [] },
@@ -202,7 +197,7 @@ describe('runAuthBehaviorsSequence', () => {
     };
 
     const results = await runAuthBehaviorsSequence(
-      behaviors, context, credentialTracker, runner, 50 // Very short timeout
+      behaviors, context, credentialTracker, runner, 50
     );
 
     expect(results).toHaveLength(1);
@@ -233,7 +228,7 @@ describe('runAuthBehaviorsSequence', () => {
       id: 'sign-up',
       title: 'Sign Up',
       dependencies: [],
-      examples: [], // No examples
+      examples: [],
     };
     behaviors.set('sign-up', emptyBehavior);
 
@@ -250,6 +245,40 @@ describe('runAuthBehaviorsSequence', () => {
     expect(results[0].error).toContain('No examples found');
   });
 
+  it('should not reload page for sign-in when invalid-sign-in is absent', async () => {
+    const behaviors = new Map<string, HarborBehavior>();
+    behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
+    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In'));
+
+    const context = new VerificationContext();
+    const credentialTracker = new CredentialTracker();
+    const runner = createMockRunner(true);
+
+    await runAuthBehaviorsSequence(
+      behaviors, context, credentialTracker, runner, 60000
+    );
+
+    expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true, reloadPage: false });
+    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: false });
+  });
+
+  it('should NOT reload when sign-in follows sign-out (no invalid-sign-in)', async () => {
+    const behaviors = new Map<string, HarborBehavior>();
+    behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
+    behaviors.set('sign-out', makeBehavior('sign-out', 'Sign Out'));
+    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In'));
+
+    const context = new VerificationContext();
+    const credentialTracker = new CredentialTracker();
+    const runner = createMockRunner(true);
+
+    await runAuthBehaviorsSequence(
+      behaviors, context, credentialTracker, runner, 60000
+    );
+
+    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false, reloadPage: false });
+  });
+
   it('should only run auth behaviors found in authOrder', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
@@ -264,7 +293,6 @@ describe('runAuthBehaviorsSequence', () => {
       behaviors, context, credentialTracker, runner, 60000
     );
 
-    // Only sign-up and sign-in (in auth order), not add-task
     expect(results).toHaveLength(2);
     expect(results[0].behaviorId).toBe('sign-up');
     expect(results[1].behaviorId).toBe('sign-in');

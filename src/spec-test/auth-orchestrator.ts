@@ -108,8 +108,12 @@ export async function runAuthBehaviorsSequence(
 
       const exampleToRun = { ...example, steps: processedSteps };
 
+      // Reload page before Sign In if Invalid Sign In ran before it (cleans dirty form)
+      const prevBehaviorId = i > 0 ? authBehaviors[i - 1].id : '';
+      const needsReload = behavior.id === 'sign-in' && prevBehaviorId === 'invalid-sign-in';
+
       const exampleResult = await withTimeout(
-        runner.runExample(exampleToRun, { clearSession: isFirst }),
+        runner.runExample(exampleToRun, { clearSession: isFirst, reloadPage: needsReload }),
         behaviorTimeoutMs,
         `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
       );

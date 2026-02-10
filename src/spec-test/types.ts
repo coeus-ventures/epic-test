@@ -281,6 +281,10 @@ export interface BehaviorRunner {
   runExample(example: SpecExample, options?: {
     clearSession?: boolean;
     navigateToPath?: string;
+    /** Credentials for auth recovery if navigation causes session loss. */
+    credentials?: { email: string | null; password: string | null };
+    /** Reload the page before running steps (cleans dirty form state). */
+    reloadPage?: boolean;
   }): Promise<ExampleResult>;
 }
 

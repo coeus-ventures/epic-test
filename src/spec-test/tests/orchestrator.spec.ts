@@ -77,17 +77,11 @@ describe('verifyAllBehaviors', () => {
 
     const summary = await verifyAllBehaviors('/path/to/instruction.md', mockRunner);
 
-    // readFile called with the instruction path
     expect(mockReadFile).toHaveBeenCalledWith('/path/to/instruction.md', 'utf-8');
-
-    // Auth behaviors run first
     expect(mockRunAuth).toHaveBeenCalledTimes(1);
-
-    // Non-auth behavior verified after
     expect(mockVerifyBehavior).toHaveBeenCalledTimes(1);
     expect(mockVerifyBehavior.mock.calls[0][0].id).toBe('add-task');
 
-    // Summary has correct totals
     expect(summary.passed).toBe(2);
     expect(summary.failed).toBe(0);
     expect(summary.total).toBe(2);
@@ -117,7 +111,6 @@ describe('verifyAllBehaviors', () => {
 
     const summary = await verifyAllBehaviors('/path/to/instruction.md', mockRunner);
 
-    // verifyBehaviorWithDependencies should only be called for non-auth behavior
     expect(mockVerifyBehavior).toHaveBeenCalledTimes(1);
     expect(mockVerifyBehavior.mock.calls[0][0].id).toBe('view-dashboard');
 
@@ -211,10 +204,8 @@ describe('verifyAllBehaviors', () => {
     mockParse.mockReturnValue(behaviors);
     mockRunAuth.mockResolvedValue([]);
 
-    // Track the credentialTracker argument to verify reset is called
     const trackerStates: boolean[] = [];
     mockVerifyBehavior.mockImplementation(async (_behavior, _all, _ctx, credentialTracker) => {
-      // After reset(), hasCredentials() should be false
       trackerStates.push(credentialTracker.hasCredentials());
       return {
         behaviorId: _behavior.id,
@@ -226,7 +217,6 @@ describe('verifyAllBehaviors', () => {
 
     await verifyAllBehaviors('/path/to/instruction.md', mockRunner);
 
-    // Each non-auth behavior gets a fresh (reset) credential tracker
     expect(trackerStates).toEqual([false, false]);
   });
 
@@ -245,7 +235,6 @@ describe('verifyAllBehaviors', () => {
 
     await verifyAllBehaviors('/path/to/instruction.md', mockRunner, 30000);
 
-    // Auth sequence gets the custom timeout
     expect(mockRunAuth.mock.calls[0][4]).toBe(30000);
   });
 });

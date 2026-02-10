@@ -31,6 +31,7 @@ import {
   isNavigationAction,
   isRefreshAction,
   extractExpectedText,
+  extractNavigationTarget,
   getEnhancedErrorContext,
   getCheckErrorContext,
   MAX_RETRIES,
@@ -210,13 +211,81 @@ export class SpecTestRunner {
     console.log(`[runExample] Hard reset complete. Page URL: ${page.url()}`);
   }
 
-  /** Navigate to a page path while preserving the current session (localStorage/cookies). */
-  private async navigateToPagePath(page: Page, pagePath: string): Promise<void> {
+  /** Compare URLs ignoring trailing slashes. */
+  private urlsMatch(a: string, b: string): boolean {
+    return a.replace(/\/$/, '') === b.replace(/\/$/, '');
+  }
+
+  /** Detect if the page was redirected to a sign-in/login page. */
+  private isSignInRedirect(currentUrl: string, targetUrl: string): boolean {
+    if (this.urlsMatch(currentUrl, targetUrl)) return false;
+    const path = new URL(currentUrl).pathname.toLowerCase();
+    return /\/(sign[-_]?in|login|auth)/.test(path);
+  }
+
+  /** Attempt to re-authenticate by filling the sign-in form. */
+  private async recoverAuth(
+    page: Page,
+    credentials: { email: string | null; password: string | null },
+    targetUrl: string
+  ): Promise<void> {
+    const { stagehand } = await this.initialize();
+    try {
+      await stagehand.act(`Type "${credentials.email}" into the email field`);
+      await stagehand.act(`Type "${credentials.password}" into the password field`);
+      await stagehand.act('Click the sign in button');
+      await page.waitForLoadState('networkidle');
+
+      // Navigate to the original target after re-auth
+      const afterAuth = page.url();
+      if (!this.urlsMatch(afterAuth, targetUrl)) {
+        await page.evaluate((url: string) => { window.location.href = url; }, targetUrl);
+        await page.waitForLoadState('networkidle');
+      }
+      console.log(`[navigateToPagePath] Auth recovery succeeded. Page URL: ${page.url()}`);
+    } catch (error) {
+      console.log(`[navigateToPagePath] Auth recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Navigate to a page path while preserving the current session.
+   * Uses soft navigation (window.location.href) instead of page.goto() to avoid
+   * destroying SPA in-memory auth state. Includes auth recovery if session is lost.
+   */
+  private async navigateToPagePath(
+    page: Page,
+    pagePath: string,
+    credentials?: { email: string | null; password: string | null }
+  ): Promise<void> {
     const targetUrl = `${this.config.baseUrl.replace(/\/$/, '')}${pagePath}`;
-    console.log(`[runExample] Navigating to page path: ${targetUrl}`);
-    await page.goto(targetUrl);
+    const currentUrl = page.url();
+
+    // Skip if already on the target URL
+    if (this.urlsMatch(currentUrl, targetUrl)) {
+      console.log(`[navigateToPagePath] Already on ${pagePath}, skipping navigation`);
+      return;
+    }
+
+    // Skip parameterized routes (e.g., /products/:id) — trust dependency chain navigation
+    if (/:\w+/.test(pagePath)) {
+      console.log(`[navigateToPagePath] Parameterized route "${pagePath}", skipping navigation (trusting dependency chain)`);
+      return;
+    }
+
+    // Soft navigation (avoids full reload, preserves SPA state)
+    console.log(`[navigateToPagePath] Soft-navigating to ${targetUrl}`);
+    await page.evaluate((url: string) => { window.location.href = url; }, targetUrl);
     await page.waitForLoadState('networkidle');
-    console.log(`[runExample] Page URL after navigation: ${page.url()}`);
+
+    // Auth recovery — detect redirect to sign-in page
+    const afterUrl = page.url();
+    if (this.isSignInRedirect(afterUrl, targetUrl) && credentials?.email && credentials?.password) {
+      console.log(`[navigateToPagePath] Auth lost — detected redirect to ${afterUrl}. Attempting recovery...`);
+      await this.recoverAuth(page, credentials, targetUrl);
+    } else {
+      console.log(`[navigateToPagePath] Page URL after navigation: ${afterUrl}`);
+    }
   }
 
   /** Build failedAt context from a failed step result. */
@@ -258,6 +327,10 @@ export class SpecTestRunner {
     clearSession?: boolean;
     /** Navigate to this page path for non-first chain steps (e.g., "/candidates") */
     navigateToPath?: string;
+    /** Credentials for auth recovery if navigation causes session loss. */
+    credentials?: { email: string | null; password: string | null };
+    /** Reload the page before running steps (cleans dirty form state). */
+    reloadPage?: boolean;
   }): Promise<ExampleResult> {
     const startTime = Date.now();
 
@@ -277,9 +350,16 @@ export class SpecTestRunner {
       if (shouldClearSession) {
         await this.resetSession(page);
       } else if (options?.navigateToPath) {
-        await this.navigateToPagePath(page, options.navigateToPath);
+        await this.navigateToPagePath(page, options.navigateToPath, options?.credentials);
       } else {
         console.log(`[runExample] Preserving session. Page URL: ${page.url()}`);
+      }
+
+      // Reload page to clean dirty form state (e.g., after Invalid Sign In)
+      if (options?.reloadPage) {
+        console.log(`[runExample] Reloading page to clean form state`);
+        await page.reload();
+        await page.waitForLoadState('networkidle');
       }
 
       // Take initial snapshot for B-Test diff-based assertions
@@ -423,6 +503,20 @@ export class SpecTestRunner {
 
       // Stagehand AI action with retry logic
       const actResult = await this.executeActWithRetry(step.instruction, stagehand, page);
+
+      // Redundant navigation fallback: if act failed and it's a UI navigation action
+      // (e.g., "Click Contacts in the navigation") and the URL already matches, treat as no-op
+      if (!actResult.success) {
+        const navTarget = extractNavigationTarget(step.instruction);
+        if (navTarget) {
+          const currentPath = new URL(page.url()).pathname.toLowerCase();
+          if (currentPath.includes(navTarget)) {
+            console.log(`[runStep] Act failed but URL "${currentPath}" already contains "${navTarget}" — treating as successful no-op`);
+            return { step, success: true, duration: Date.now() - stepStart, actResult: { success: true, duration: Date.now() - stepStart, pageUrl: page.url() } };
+          }
+        }
+      }
+
       return { step, success: actResult.success, duration: Date.now() - stepStart, actResult };
     }
 
@@ -445,7 +539,32 @@ export class SpecTestRunner {
   }
 
   /**
+   * Try to dismiss a blocking modal/overlay by pressing Escape, then retry the action.
+   * Returns the result of the retry, or null if no modal was detected/dismissed.
+   */
+  private async tryDismissModalAndRetry(
+    instruction: string,
+    stagehand: Stagehand,
+    page: Page
+  ): Promise<ActResult | null> {
+    try {
+      // Press Escape to dismiss any overlay/modal
+      await page.keyboard.press('Escape');
+      await this.delay(500);
+
+      // Retry the action after dismissal
+      const retryResult = await executeActStep(instruction, stagehand);
+      if (retryResult.success) {
+        console.log(`[executeActWithRetry] Modal dismissed (Escape), retry succeeded for: "${instruction.slice(0, 60)}..."`);
+        return retryResult;
+      }
+    } catch { /* modal dismissal didn't help */ }
+    return null;
+  }
+
+  /**
    * Execute an Act step with retry logic for transient errors.
+   * On final failure, attempts modal dismissal (Escape) before giving up.
    */
   private async executeActWithRetry(
     instruction: string,
@@ -453,12 +572,15 @@ export class SpecTestRunner {
     page: Page
   ): Promise<ActResult> {
     let lastAttempt = 1;
+    let lastFailedResult: ActResult | null = null;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       lastAttempt = attempt;
       try {
         const result = await executeActStep(instruction, stagehand);
         if (result.success) return result;
+
+        lastFailedResult = result;
 
         if (result.error && this.isRetryableError(result.error) && attempt < MAX_RETRIES) {
           await this.delay(RETRY_DELAY);
@@ -467,9 +589,9 @@ export class SpecTestRunner {
 
         // Enhance schema/object errors with page context
         if (result.error && /schema|No object generated/i.test(result.error)) {
-          return { ...result, error: await getEnhancedErrorContext(page, instruction, attempt) };
+          lastFailedResult = { ...result, error: await getEnhancedErrorContext(page, instruction, attempt) };
         }
-        return result;
+        break; // exit loop → try modal dismissal as last resort
       } catch (error) {
         const rawError = error instanceof Error ? error : new Error(String(error));
         if (this.isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
@@ -479,11 +601,16 @@ export class SpecTestRunner {
         let errorMsg: string;
         try { errorMsg = await getEnhancedErrorContext(page, instruction, attempt); }
         catch { errorMsg = rawError.message; }
-        return { success: false, duration: 0, error: errorMsg };
+        lastFailedResult = { success: false, duration: 0, error: errorMsg };
+        break; // exit loop → try modal dismissal as last resort
       }
     }
 
-    return {
+    // All retries exhausted — try dismissing a modal/overlay and retry once
+    const modalRetry = await this.tryDismissModalAndRetry(instruction, stagehand, page);
+    if (modalRetry) return modalRetry;
+
+    return lastFailedResult ?? {
       success: false,
       duration: 0,
       error: await getEnhancedErrorContext(page, instruction, lastAttempt),
