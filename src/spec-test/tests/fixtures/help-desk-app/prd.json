@@ -1,0 +1,110 @@
+{
+  "name": "Help Desk App",
+  "description": "A support ticket management application for tracking customer issues and providing assistance.",
+  "behaviors": [
+    {
+      "id": "sign-up",
+      "title": "Sign Up",
+      "specFile": "behaviors/sign-up.md",
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "sign-in",
+      "title": "Sign In",
+      "specFile": "behaviors/sign-in.md",
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "invalid-sign-in",
+      "title": "Invalid Sign In",
+      "specFile": "behaviors/invalid-sign-in.md",
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "sign-out",
+      "title": "Sign Out",
+      "specFile": "behaviors/sign-out.md",
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "create-ticket",
+      "title": "Create Ticket",
+      "specFile": "behaviors/create-ticket.md",
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "assign-ticket-to-agent",
+      "title": "Assign Ticket to Agent",
+      "specFile": "behaviors/assign-ticket-to-agent.md",
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "add-reply-to-ticket",
+      "title": "Add Reply to Ticket",
+      "specFile": "behaviors/add-reply-to-ticket.md",
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "change-ticket-status",
+      "title": "Change Ticket Status",
+      "specFile": "behaviors/change-ticket-status.md",
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "resolve-ticket",
+      "title": "Resolve Ticket",
+      "specFile": "behaviors/resolve-ticket.md",
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "filter-tickets-by-status",
+      "title": "Filter Tickets by Status",
+      "specFile": "behaviors/filter-tickets-by-status.md",
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "filter-tickets-by-priority",
+      "title": "Filter Tickets by Priority",
+      "specFile": "behaviors/filter-tickets-by-priority.md",
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "add-internal-note",
+      "title": "Add Internal Note",
+      "specFile": "behaviors/add-internal-note.md",
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "search-tickets",
+      "title": "Search Tickets",
+      "specFile": "behaviors/search-tickets.md",
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
