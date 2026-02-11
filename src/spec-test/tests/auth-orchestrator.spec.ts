@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { isAuthBehavior, withTimeout, runAuthBehaviorsSequence, DEFAULT_BEHAVIOR_TIMEOUT_MS } from '../index';
 import { VerificationContext } from '../verification-context';
 import { CredentialTracker } from '../credential-tracker';
-import type { HarborBehavior, ExampleResult } from '../types';
+import type { HarborBehavior, ExampleResult, BehaviorRunner } from '../types';
 
 describe('isAuthBehavior', () => {
   it('should match exact auth pattern IDs', () => {
@@ -71,7 +71,7 @@ describe('DEFAULT_BEHAVIOR_TIMEOUT_MS', () => {
 
 describe('runAuthBehaviorsSequence', () => {
   const createMockRunner = (shouldSucceed: boolean) => ({
-    runExample: vi.fn(async (): Promise<ExampleResult> => ({
+    runExample: vi.fn<BehaviorRunner['runExample']>(async (): Promise<ExampleResult> => ({
       example: { name: 'test', steps: [] },
       success: shouldSucceed,
       steps: [],
@@ -245,7 +245,7 @@ describe('runAuthBehaviorsSequence', () => {
     expect(results[0].error).toContain('No examples found');
   });
 
-  it('should not reload page for sign-in when invalid-sign-in is absent', async () => {
+  it('should always reload page for sign-in (ensures clean form state)', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
     behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In'));
@@ -259,10 +259,11 @@ describe('runAuthBehaviorsSequence', () => {
     );
 
     expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true, reloadPage: false });
-    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: false });
+    // Sign In always gets reloadPage: true — clears dirty form state from any previous auth step
+    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: true });
   });
 
-  it('should NOT reload when sign-in follows sign-out (no invalid-sign-in)', async () => {
+  it('should reload for sign-in even when sign-in follows sign-out (no invalid-sign-in)', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
     behaviors.set('sign-out', makeBehavior('sign-out', 'Sign Out'));
@@ -276,7 +277,8 @@ describe('runAuthBehaviorsSequence', () => {
       behaviors, context, credentialTracker, runner, 60000
     );
 
-    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false, reloadPage: false });
+    // Sign In always reloads — ensures clean form regardless of previous auth behavior
+    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false, reloadPage: true });
   });
 
   it('should only run auth behaviors found in authOrder', async () => {

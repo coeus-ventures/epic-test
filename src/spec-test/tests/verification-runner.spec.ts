@@ -224,6 +224,106 @@ describe('verifyBehaviorWithDependencies', () => {
     expect(runner.runExample).toHaveBeenCalledTimes(3);
   });
 
+  it('skips navigation for target behavior when intermediate deps built context', async () => {
+    const behaviors = new Map<string, HarborBehavior>();
+    const signUp: HarborBehavior = {
+      id: 'sign-up',
+      title: 'Sign Up',
+      dependencies: [],
+      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Fill form' }] }]
+    };
+    const createProject: HarborBehavior = {
+      id: 'create-project',
+      title: 'Create Project',
+      dependencies: [{ behaviorId: 'sign-up' }],
+      pagePath: '/projects',
+      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Click Create' }] }]
+    };
+    const createIssue: HarborBehavior = {
+      id: 'create-issue',
+      title: 'Create Issue',
+      dependencies: [{ behaviorId: 'create-project' }],
+      pagePath: '/projects',
+      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Click Create Issue' }] }]
+    };
+
+    behaviors.set('sign-up', signUp);
+    behaviors.set('create-project', createProject);
+    behaviors.set('create-issue', createIssue);
+
+    const context = new VerificationContext();
+    const credentialTracker = new CredentialTracker();
+    const runner = createMockRunner(true);
+
+    await verifyBehaviorWithDependencies(
+      createIssue,
+      behaviors,
+      context,
+      credentialTracker,
+      runner
+    );
+
+    // Chain: [Sign Up, Create Project, Create Issue] — 3 steps
+    expect(runner.runExample).toHaveBeenCalledTimes(3);
+
+    // Sign Up (first): clearSession=true, no navigateToPath
+    expect(runner.runExample.mock.calls[0][1]).toMatchObject({ clearSession: true });
+    expect(runner.runExample.mock.calls[0][1].navigateToPath).toBeUndefined();
+
+    // Create Project (intermediate dep): clearSession=false, navigateToPath=/projects
+    expect(runner.runExample.mock.calls[1][1]).toMatchObject({
+      clearSession: false,
+      navigateToPath: '/projects',
+    });
+
+    // Create Issue (target with intermediate deps): clearSession=false, NO navigateToPath
+    // The dependency chain built the page context — don't override it
+    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false });
+    expect(runner.runExample.mock.calls[2][1].navigateToPath).toBeUndefined();
+  });
+
+  it('navigates for target behavior in short chains (Sign Up → target only)', async () => {
+    const behaviors = new Map<string, HarborBehavior>();
+    const signUp: HarborBehavior = {
+      id: 'sign-up',
+      title: 'Sign Up',
+      dependencies: [],
+      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Fill form' }] }]
+    };
+    const viewContacts: HarborBehavior = {
+      id: 'view-contacts',
+      title: 'View Contacts',
+      dependencies: [{ behaviorId: 'sign-up' }],
+      pagePath: '/contacts',
+      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Click Add Contact' }] }]
+    };
+
+    behaviors.set('sign-up', signUp);
+    behaviors.set('view-contacts', viewContacts);
+
+    const context = new VerificationContext();
+    const credentialTracker = new CredentialTracker();
+    const runner = createMockRunner(true);
+
+    await verifyBehaviorWithDependencies(
+      viewContacts,
+      behaviors,
+      context,
+      credentialTracker,
+      runner
+    );
+
+    // Chain: [Sign Up, View Contacts] — only 2 steps (no intermediate deps)
+    expect(runner.runExample).toHaveBeenCalledTimes(2);
+
+    // View Contacts (target, short chain): clearSession=false, navigateToPath=/contacts
+    // No intermediate deps, so navigation IS applied
+    expect(runner.runExample.mock.calls[1][1]).toMatchObject({
+      clearSession: false,
+      navigateToPath: '/contacts',
+    });
+  });
+
   it('does not overwrite dependency pass status when it fails in another chain', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     const signUp: HarborBehavior = {

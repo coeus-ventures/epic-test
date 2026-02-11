@@ -108,9 +108,10 @@ export async function runAuthBehaviorsSequence(
 
       const exampleToRun = { ...example, steps: processedSteps };
 
-      // Reload page before Sign In if Invalid Sign In ran before it (cleans dirty form)
-      const prevBehaviorId = i > 0 ? authBehaviors[i - 1].id : '';
-      const needsReload = behavior.id === 'sign-in' && prevBehaviorId === 'invalid-sign-in';
+      // Always reload before Sign In to ensure clean form state.
+      // After Invalid Sign In, the form may contain stale credentials from the failed attempt.
+      // Some SPAs re-hydrate form state on reload, so runner.ts also clears input fields.
+      const needsReload = behavior.id === 'sign-in';
 
       const exampleResult = await withTimeout(
         runner.runExample(exampleToRun, { clearSession: isFirst, reloadPage: needsReload }),

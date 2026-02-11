@@ -30,8 +30,10 @@ import {
   generateFailureContext,
   isNavigationAction,
   isRefreshAction,
+  isSaveAction,
   extractExpectedText,
   extractNavigationTarget,
+  extractSelectAction,
   getEnhancedErrorContext,
   getCheckErrorContext,
   MAX_RETRIES,
@@ -273,6 +275,18 @@ export class SpecTestRunner {
       return;
     }
 
+    // Skip if already in a child path of the target — dependency chain built this context.
+    // e.g., on /projects/123/issues and target is /projects → don't navigate back to parent.
+    // This prevents losing sub-page context established by dependency chains.
+    try {
+      const currentPath = new URL(currentUrl).pathname.replace(/\/$/, '');
+      const normalizedTarget = pagePath.replace(/\/$/, '');
+      if (currentPath.startsWith(normalizedTarget + '/')) {
+        console.log(`[navigateToPagePath] Already in child path "${currentPath}" of "${normalizedTarget}", skipping navigation (preserving dependency chain context)`);
+        return;
+      }
+    } catch { /* invalid URL, proceed with navigation */ }
+
     // Soft navigation (avoids full reload, preserves SPA state)
     console.log(`[navigateToPagePath] Soft-navigating to ${targetUrl}`);
     await page.evaluate((url: string) => { window.location.href = url; }, targetUrl);
@@ -355,11 +369,19 @@ export class SpecTestRunner {
         console.log(`[runExample] Preserving session. Page URL: ${page.url()}`);
       }
 
-      // Reload page to clean dirty form state (e.g., after Invalid Sign In)
+      // Reload page to clean dirty form state (e.g., before Sign In after Invalid Sign In)
       if (options?.reloadPage) {
         console.log(`[runExample] Reloading page to clean form state`);
         await page.reload();
         await page.waitForLoadState('networkidle');
+
+        // Clear all visible form inputs — some SPAs re-hydrate form state from memory
+        await page.evaluate(() => {
+          Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea')).forEach(el => {
+            (el as HTMLInputElement).value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          });
+        }).catch(() => {});
       }
 
       // Take initial snapshot for B-Test diff-based assertions
@@ -504,6 +526,16 @@ export class SpecTestRunner {
       // Stagehand AI action with retry logic
       const actResult = await this.executeActWithRetry(step.instruction, stagehand, page);
 
+      // Post-save stabilization: after save/submit/publish actions, wait for form
+      // dismissal before proceeding. Inline forms share the page with the listing and
+      // need time to close after the save action. If the form is still open, retry once.
+      if (actResult.success && isSaveAction(step.instruction)) {
+        const retried = await this.waitForSaveCompletion(page, step.instruction, stagehand);
+        if (retried) {
+          return { step, success: true, duration: Date.now() - stepStart, actResult: { ...actResult, pageUrl: page.url() } };
+        }
+      }
+
       // Redundant navigation fallback: if act failed and it's a UI navigation action
       // (e.g., "Click Contacts in the navigation") and the URL already matches, treat as no-op
       if (!actResult.success) {
@@ -539,6 +571,53 @@ export class SpecTestRunner {
   }
 
   /**
+   * After a save/submit/publish action, wait for the form to dismiss.
+   * Inline forms share the page with listings — they need time to close after save.
+   * If the form is still visible after waiting (save button + multiple inputs),
+   * retry the save click once.
+   * Returns true if a retry was performed (caller can use the updated page state).
+   */
+  private async waitForSaveCompletion(
+    page: Page, instruction: string, stagehand: Stagehand
+  ): Promise<boolean> {
+    // Wait for network activity to settle (AJAX save requests)
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.delay(500);
+
+    // Check if form is still prominently visible:
+    // A save/submit/publish button AND 2+ visible input fields = form likely still open
+    const formStillOpen = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
+      const hasSaveButton = buttons.some(btn => {
+        const text = (btn.textContent || '').trim().toLowerCase();
+        const rect = (btn as HTMLElement).getBoundingClientRect();
+        return rect.height > 0 && rect.width > 0 && /^(save|submit|publish)/.test(text);
+      });
+      if (!hasSaveButton) return false;
+
+      const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="search"]), textarea'));
+      const visibleInputs = inputs.filter(input => {
+        const rect = (input as HTMLElement).getBoundingClientRect();
+        return rect.height > 0 && rect.width > 0;
+      }).length;
+      return visibleInputs >= 2;
+    }).catch(() => false);
+
+    if (!formStillOpen) return false;
+
+    // Form still open — retry the save action
+    console.log(`[waitForSaveCompletion] Form still visible after save — retrying: "${instruction.slice(0, 60)}"`);
+    try {
+      await stagehand.act(instruction);
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await this.delay(500);
+    } catch {
+      console.log(`[waitForSaveCompletion] Save retry failed, proceeding`);
+    }
+    return true;
+  }
+
+  /**
    * Try to dismiss a blocking modal/overlay by pressing Escape, then retry the action.
    * Returns the result of the retry, or null if no modal was detected/dismissed.
    */
@@ -559,6 +638,49 @@ export class SpecTestRunner {
         return retryResult;
       }
     } catch { /* modal dismissal didn't help */ }
+    return null;
+  }
+
+  /**
+   * Fallback for select/dropdown interactions that Stagehand can't handle.
+   * Finds visible <select> elements on the page and sets the value directly via DOM.
+   * Returns an ActResult on success, or null if no matching select was found.
+   */
+  private async trySelectFallback(page: Page, instruction: string): Promise<ActResult | null> {
+    const selectAction = extractSelectAction(instruction);
+    if (!selectAction) return null;
+
+    try {
+      const result = await page.evaluate((targetValue: string) => {
+        const selects = Array.from(document.querySelectorAll('select'));
+        for (const select of selects) {
+          const rect = select.getBoundingClientRect();
+          if (rect.height === 0 || rect.width === 0) continue;
+
+          const options = Array.from(select.options);
+          const match = options.find(opt =>
+            opt.text.trim().toLowerCase() === targetValue.toLowerCase() ||
+            opt.value.toLowerCase() === targetValue.toLowerCase()
+          );
+
+          if (match) {
+            select.value = match.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+          }
+        }
+        return false;
+      }, selectAction.value);
+
+      if (result) {
+        console.log(`[trySelectFallback] Direct DOM select succeeded for value "${selectAction.value}"`);
+        return { success: true, duration: 0, pageUrl: page.url() };
+      }
+    } catch {
+      console.log(`[trySelectFallback] DOM select fallback failed for "${selectAction.value}"`);
+    }
+
     return null;
   }
 
@@ -610,6 +732,10 @@ export class SpecTestRunner {
     const modalRetry = await this.tryDismissModalAndRetry(instruction, stagehand, page);
     if (modalRetry) return modalRetry;
 
+    // Try select/dropdown DOM fallback as last resort
+    const selectFallback = await this.trySelectFallback(page, instruction);
+    if (selectFallback) return selectFallback;
+
     return lastFailedResult ?? {
       success: false,
       duration: 0,
@@ -631,13 +757,14 @@ export class SpecTestRunner {
           "true if the condition is satisfied by ANY element currently visible on the page, false only if NO element matches"
         ),
       });
-      const enhancedInstruction = `Look at ALL visible elements on the page (buttons, links, text, navigation items, headings, forms). Evaluate whether this condition is satisfied: "${instruction}".
+      const enhancedInstruction = `Look at ALL visible elements on the page (buttons, links, text, navigation items, headings, forms, badges, icons, labels, timestamps). Evaluate whether this condition is satisfied: "${instruction}".
 
 IMPORTANT evaluation rules:
 - If the condition uses "or", it passes if ANY part is true
 - "navigate the application" means ANY button/link that takes you to different sections (e.g., "Jobs", "Candidates", "Dashboard", "Settings", "Home" are navigation)
 - "button to create X" includes buttons like "Create X", "Add X", "New X", or a "+" button
-- Be generous in interpretation - if the page has relevant interactive elements, the condition is likely satisfied`;
+- For visual state indicators (edited, pinned, starred, archived, resolved, etc.), look for ANY visual cue: small text labels like "(edited)", icons (pin, star, check), CSS classes, badges, status tags, tooltips, or color changes
+- Be generous in interpretation - if the page has relevant interactive elements or visual cues, the condition is likely satisfied`;
       const result = await stagehand.extract(enhancedInstruction, schema);
       console.log(`extract() double-check for "${instruction.slice(0, 80)}...": ${result.passed}`);
       return result.passed;

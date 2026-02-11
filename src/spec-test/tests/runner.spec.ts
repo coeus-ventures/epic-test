@@ -357,6 +357,110 @@ describe('SpecTestRunner', () => {
     });
   });
 
+  // --- runStep: post-save wait ---
+
+  describe('runStep — post-save wait and form dismissal', () => {
+    it('should wait and retry save when form is still visible after save action', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/products'),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+        // First evaluate call: form check returns true (form still open), second: for other checks
+        evaluate: vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click the "Save" button' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // act called twice: initial + retry after form detected still open
+      expect(mockStagehand.act).toHaveBeenCalledTimes(2);
+      expect(mockPage.waitForLoadState).toHaveBeenCalled();
+    });
+
+    it('should NOT trigger post-save wait for non-save actions', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/products'),
+        evaluate: vi.fn().mockResolvedValue(false),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click the "Add Contact" button' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // act called once — no save retry
+      expect(mockStagehand.act).toHaveBeenCalledTimes(1);
+    });
+
+    it('should skip retry when form is dismissed after save (no form detected)', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/products'),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(false), // form not visible
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click "Submit" to save the form' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // act called once — form was dismissed, no retry needed
+      expect(mockStagehand.act).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // --- runStep: check with deterministic text fast-path ---
 
   describe('runStep — check with deterministic text fast-path', () => {
@@ -839,6 +943,63 @@ describe('SpecTestRunner', () => {
       expect(mockPage.evaluate).not.toHaveBeenCalled();
     });
 
+    it('should skip navigation when already in a child path of target (preserves dependency chain context)', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/projects/123/issues'),
+        goto: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockTester = {
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+        clearSnapshots: vi.fn(),
+      };
+      const mockStagehand = {
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+
+      // On /projects/123/issues, navigating to /projects should be skipped
+      await runner.runExample({ name: 'Test', steps: [] }, { clearSession: false, navigateToPath: '/projects' });
+
+      // Should NOT have navigated (no evaluate call for soft navigation)
+      expect(mockPage.evaluate).not.toHaveBeenCalled();
+      expect(mockPage.goto).not.toHaveBeenCalled();
+    });
+
+    it('should NOT skip navigation when on a different path that merely starts with same prefix', async () => {
+      const mockPage = {
+        url: vi.fn()
+          .mockReturnValueOnce('http://localhost:8080/products-archive')
+          .mockReturnValueOnce('http://localhost:8080/products-archive')
+          .mockReturnValueOnce('http://localhost:8080/products'),
+        goto: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockTester = {
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+        clearSnapshots: vi.fn(),
+      };
+      const mockStagehand = {
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+
+      // On /products-archive, navigating to /products should NOT be skipped
+      // (products-archive is not a child of /products)
+      await runner.runExample({ name: 'Test', steps: [] }, { clearSession: false, navigateToPath: '/products' });
+
+      // Should have navigated
+      expect(mockPage.evaluate).toHaveBeenCalled();
+    });
+
     it('should NOT skip static routes like /products/new', async () => {
       const mockPage = {
         url: vi.fn()
@@ -1183,7 +1344,9 @@ describe('SpecTestRunner', () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080'),
         title: vi.fn().mockResolvedValue('Test'),
-        evaluate: vi.fn().mockResolvedValue([]),
+        // Return [] for error context evaluations, false for form-still-open check
+        evaluate: vi.fn().mockResolvedValue(false),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
       };
       const mockStagehand = {
         act: vi.fn()

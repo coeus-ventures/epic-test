@@ -30,7 +30,7 @@ export { parseSteps, parseExamples, parseHarborBehaviorsWithDependencies, parseS
 
 // --- Step Execution ---
 export { executeActStep, executeCheckStep, generateFailureContext } from "./step-execution";
-export { isNavigationAction, isRefreshAction, extractExpectedText, extractNavigationTarget } from "./step-execution";
+export { isNavigationAction, isRefreshAction, isSaveAction, extractExpectedText, extractNavigationTarget, extractSelectAction } from "./step-execution";
 export { getEnhancedErrorContext, getCheckErrorContext, MAX_RETRIES, RETRY_DELAY } from "./step-execution";
 
 // --- Verification Context ---

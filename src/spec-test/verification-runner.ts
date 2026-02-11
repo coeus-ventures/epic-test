@@ -64,11 +64,23 @@ export async function verifyBehaviorWithDependencies(
     const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker);
 
     const creds = credentialTracker.getCredentials();
-    const navigateToPath = !isFirstInChain && behavior.pagePath ? behavior.pagePath : undefined;
-    console.log(`Chain [${chainIndex}/${chain.length - 1}] ${behavior.id}: ${processedSteps.length} steps, email=${creds.email ?? '(none)'}${navigateToPath ? `, navigateTo=${navigateToPath}` : ''}`);
+
+    // Navigation strategy for dependency chains:
+    // - First step (Sign Up): clears session, navigates to baseUrl via resetSession()
+    // - Intermediate deps: navigate to their pagePath (they need to reach their page)
+    // - Target behavior: skip navigation when intermediate deps built page context,
+    //   because deps progressively navigate deeper into the app hierarchy.
+    //   navigateToPagePath() also has child-path detection as a safety net.
+    const isTargetBehavior = behavior.id === targetBehavior.id;
+    const hasIntermediateDeps = chain.length > 2; // more than just [Sign Up, target]
+    const skipNavigation = isFirstInChain || !behavior.pagePath || (isTargetBehavior && hasIntermediateDeps);
+    const navigateToPath = skipNavigation ? undefined : behavior.pagePath;
+
+    console.log(`Chain [${chainIndex}/${chain.length - 1}] ${behavior.id}: ${processedSteps.length} steps, email=${creds.email ?? '(none)'}${navigateToPath ? `, navigateTo=${navigateToPath}` : ''}${isTargetBehavior && hasIntermediateDeps ? ' (skip nav: deps built context)' : ''}`);
 
     // Execute: only clear session for the first chain step.
     // For subsequent steps, navigate to the behavior's page path if available.
+    // navigateToPagePath() will also skip if already in a child path of the target.
     const exampleToRun = { ...example, steps: processedSteps };
     let result: ExampleResult;
     try {

@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   isNavigationAction,
   isRefreshAction,
+  isSaveAction,
   extractExpectedText,
   extractNavigationTarget,
+  extractSelectAction,
   executeActStep,
   executeCheckStep,
   generateFailureContext,
@@ -51,6 +53,51 @@ describe('isRefreshAction', () => {
   it('should not match non-refresh instructions', () => {
     expect(isRefreshAction('Click refresh button')).toBe(false);
     expect(isRefreshAction('Type "reload" into field')).toBe(false);
+  });
+});
+
+describe('isSaveAction', () => {
+  it('should match save/submit/publish click instructions', () => {
+    expect(isSaveAction('Click the "Save" button')).toBe(true);
+    expect(isSaveAction('Click Save')).toBe(true);
+    expect(isSaveAction('Click "Save Order"')).toBe(true);
+    expect(isSaveAction('Click Submit')).toBe(true);
+    expect(isSaveAction('Click the submit button')).toBe(true);
+    expect(isSaveAction('Click "Publish"')).toBe(true);
+    expect(isSaveAction('Press the Save button')).toBe(true);
+  });
+
+  it('should NOT match non-save actions', () => {
+    expect(isSaveAction('Click the "Add Contact" button')).toBe(false);
+    expect(isSaveAction('Click Create')).toBe(false);
+    expect(isSaveAction('Click the "Delete" button')).toBe(false);
+    expect(isSaveAction('Type "Save" into the input')).toBe(false);
+    expect(isSaveAction('Navigate to /save')).toBe(false);
+  });
+});
+
+describe('extractSelectAction', () => {
+  it('should match "Select X from dropdown" patterns', () => {
+    expect(extractSelectAction('Select "Open" from the status dropdown')).toEqual({ value: 'Open' });
+    expect(extractSelectAction("Choose 'High' from the priority dropdown")).toEqual({ value: 'High' });
+    expect(extractSelectAction('Select "Technology" from category')).toEqual({ value: 'Technology' });
+    expect(extractSelectAction("Select 'Closed' from the filter")).toEqual({ value: 'Closed' });
+  });
+
+  it('should match "Change/Set X to Y" patterns', () => {
+    expect(extractSelectAction('Change status to "Resolved"')).toEqual({ value: 'Resolved' });
+    expect(extractSelectAction("Set priority to 'Critical'")).toEqual({ value: 'Critical' });
+  });
+
+  it('should match bare "Select X" patterns', () => {
+    expect(extractSelectAction('Select "Open"')).toEqual({ value: 'Open' });
+    expect(extractSelectAction("Choose 'Pending'")).toEqual({ value: 'Pending' });
+  });
+
+  it('should NOT match non-select instructions', () => {
+    expect(extractSelectAction('Click the "Add" button')).toBeNull();
+    expect(extractSelectAction('Type "hello" into the input')).toBeNull();
+    expect(extractSelectAction('Navigate to /settings')).toBeNull();
   });
 });
 

@@ -103,7 +103,7 @@ async function executeSemanticCheck(
   // Enhance instruction with interpretation hints to reduce false negatives
   const enhancedInstruction = `${instruction}
 
-(INTERPRETATION: "navigate the application" = any button/link to app sections like Jobs, Candidates, Dashboard. "create X" = buttons like Create/Add/New. Use "or" generously - if ANY part is true, pass.)`;
+(INTERPRETATION: "navigate the application" = any button/link to app sections like Jobs, Candidates, Dashboard. "create X" = buttons like Create/Add/New. Use "or" generously - if ANY part is true, pass. For visual state checks like "edited", "pinned", "starred", look for ANY indicator: text labels, icons, badges, status tags, or visual changes.)`;
 
   const passed = await tester.assert(enhancedInstruction);
 
@@ -343,6 +343,41 @@ export function extractNavigationTarget(instruction: string): string | null {
 /** Check if instruction is a page refresh action. */
 export function isRefreshAction(instruction: string): boolean {
   return /refresh\s+(?:the\s+)?page|reload\s+(?:the\s+)?page|^refresh$|^reload$/i.test(instruction);
+}
+
+/**
+ * Detect if an act instruction is a save/submit action (clicking a save-like button).
+ * Used to trigger post-save wait logic (wait for form dismissal before proceeding).
+ */
+export function isSaveAction(instruction: string): boolean {
+  if (!/click|press|tap|hit/i.test(instruction)) return false;
+  return /\b(save|submit|publish)\b/i.test(instruction);
+}
+
+/**
+ * Detect if an act instruction targets a select/dropdown element.
+ * Returns the target value to select, or null if not a select action.
+ */
+export function extractSelectAction(instruction: string): { value: string } | null {
+  // "Select 'X' from [the] Y [dropdown/menu/select]"
+  const selectFromMatch = instruction.match(
+    /(?:select|choose)\s+["']([^"']+)["']\s+(?:from|in)\s+/i
+  );
+  if (selectFromMatch) return { value: selectFromMatch[1] };
+
+  // "Change/Set Y to 'X'"
+  const changeToMatch = instruction.match(
+    /(?:change|set)\s+.+?\s+to\s+["']([^"']+)["']/i
+  );
+  if (changeToMatch) return { value: changeToMatch[1] };
+
+  // "Select 'X'" (without "from", shorter pattern)
+  const selectOnlyMatch = instruction.match(
+    /(?:select|choose)\s+["']([^"']+)["'](?:\s|$)/i
+  );
+  if (selectOnlyMatch) return { value: selectOnlyMatch[1] };
+
+  return null;
 }
 
 /** Extract quoted text from check instruction for direct verification. */
