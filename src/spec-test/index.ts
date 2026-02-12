@@ -30,8 +30,21 @@ export { parseSteps, parseExamples, parseHarborBehaviorsWithDependencies, parseS
 
 // --- Step Execution ---
 export { executeActStep, executeCheckStep, generateFailureContext } from "./step-execution";
-export { isNavigationAction, isRefreshAction, isSaveAction, extractExpectedText, extractNavigationTarget, extractSelectAction } from "./step-execution";
+export { isNavigationAction, isRefreshAction, isSaveAction, isModalTriggerAction, isModalDismissAction, extractExpectedText, extractNavigationTarget, extractSelectAction } from "./step-execution";
 export { getEnhancedErrorContext, getCheckErrorContext, MAX_RETRIES, RETRY_DELAY } from "./step-execution";
+
+// --- Form Filler ---
+export { fillEmptyRequiredFields, generateFillValue } from "./form-filler";
+export type { FormField } from "./form-filler";
+
+// --- Session Management ---
+export { detectPort, resetSession, navigateToPagePath, clearFormFields, urlsMatch, isSignInRedirect, recoverAuth } from "./session-management";
+
+// --- Act Helpers ---
+export { delay, isRetryableError, executePageAction, executeActWithRetry, executeSelectAction, trySelectFallback, tryDismissModalAndRetry, waitForFormDismissal, waitForModalAppearance, waitForModalDismissal } from "./act-helpers";
+
+// --- Check Helpers ---
+export { EXTRACT_EVALUATION_PROMPT, doubleCheckWithExtract, tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
 
 // --- Verification Context ---
 export { VerificationContext } from "./verification-context";

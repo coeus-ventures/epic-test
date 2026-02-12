@@ -3,6 +3,8 @@ import {
   isNavigationAction,
   isRefreshAction,
   isSaveAction,
+  isModalTriggerAction,
+  isModalDismissAction,
   extractExpectedText,
   extractNavigationTarget,
   extractSelectAction,
@@ -125,6 +127,53 @@ describe('extractExpectedText', () => {
   it('should handle single quotes', () => {
     const result = extractExpectedText("Should see 'Welcome back'");
     expect(result).toEqual({ text: 'Welcome back', shouldExist: true });
+  });
+});
+
+describe('isModalTriggerAction', () => {
+  it('should match click edit/delete/remove/archive/reject/close/pin actions', () => {
+    expect(isModalTriggerAction('Click the "Edit" button')).toBe(true);
+    expect(isModalTriggerAction('Click Delete')).toBe(true);
+    expect(isModalTriggerAction('Click the remove icon')).toBe(true);
+    expect(isModalTriggerAction('Click "Archive"')).toBe(true);
+    expect(isModalTriggerAction('Press the reject button')).toBe(true);
+    expect(isModalTriggerAction('Click the close icon')).toBe(true);
+    expect(isModalTriggerAction('Click the "Pin" button')).toBe(true);
+    expect(isModalTriggerAction('Tap unpin')).toBe(true);
+  });
+
+  it('should NOT match non-click actions', () => {
+    expect(isModalTriggerAction('Type "edit" into the input')).toBe(false);
+    expect(isModalTriggerAction('Navigate to /delete')).toBe(false);
+  });
+
+  it('should NOT match non-modal trigger click actions', () => {
+    expect(isModalTriggerAction('Click the "Save" button')).toBe(false);
+    expect(isModalTriggerAction('Click Submit')).toBe(false);
+    expect(isModalTriggerAction('Click the "Add" button')).toBe(false);
+  });
+});
+
+describe('isModalDismissAction', () => {
+  it('should match click confirm/cancel/dismiss actions', () => {
+    expect(isModalDismissAction('Click "Confirm"')).toBe(true);
+    expect(isModalDismissAction('Click the Cancel button')).toBe(true);
+    expect(isModalDismissAction('Press dismiss')).toBe(true);
+  });
+
+  it('should match save/submit in modal/dialog context', () => {
+    expect(isModalDismissAction('Click "Save" in the modal')).toBe(true);
+    expect(isModalDismissAction('Click submit in the dialog')).toBe(true);
+    expect(isModalDismissAction('Click save in the popup form')).toBe(true);
+  });
+
+  it('should NOT match non-click actions', () => {
+    expect(isModalDismissAction('Type "confirm" into the input')).toBe(false);
+  });
+
+  it('should NOT match regular save (without modal/dialog context)', () => {
+    expect(isModalDismissAction('Click the "Save" button')).toBe(false);
+    expect(isModalDismissAction('Click Submit')).toBe(false);
   });
 });
 

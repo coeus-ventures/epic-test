@@ -380,6 +380,27 @@ export function extractSelectAction(instruction: string): { value: string } | nu
   return null;
 }
 
+/**
+ * Detect if an act instruction is a modal-triggering action (edit, delete, etc.).
+ * After these actions, a modal/dialog may appear that needs time to render.
+ * Used to trigger a non-fatal waitFor("modal appeared") after the act.
+ */
+export function isModalTriggerAction(instruction: string): boolean {
+  if (!/click|press|tap/i.test(instruction)) return false;
+  return /\b(edit|delete|remove|archive|reject|close|pin|unpin)\b/i.test(instruction);
+}
+
+/**
+ * Detect if an act instruction dismisses a modal (confirm, cancel, close, dismiss).
+ * After these actions, the modal should close and background content becomes accessible.
+ * Used to trigger waitFor("modal dismissed") + snapshot reset after the act.
+ */
+export function isModalDismissAction(instruction: string): boolean {
+  if (!/click|press|tap/i.test(instruction)) return false;
+  return /\b(confirm|cancel|dismiss)\b/i.test(instruction) ||
+         /\b(save|submit)\b.*\b(modal|dialog|popup|form)\b/i.test(instruction);
+}
+
 /** Extract quoted text from check instruction for direct verification. */
 export function extractExpectedText(instruction: string): { text: string; shouldExist: boolean } | null {
   const patterns = [

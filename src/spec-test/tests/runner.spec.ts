@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SpecTestRunner } from '../runner';
+import { detectPort, resetSession } from '../session-management';
 import type { SpecStep, StepContext, TestableSpec } from '../types';
 import path from "path";
 import os from "os";
@@ -359,13 +360,12 @@ describe('SpecTestRunner', () => {
 
   // --- runStep: post-save wait ---
 
-  describe('runStep — post-save wait and form dismissal', () => {
-    it('should wait and retry save when form is still visible after save action', async () => {
+  describe('runStep — post-save stabilization', () => {
+    it('should wait for networkidle + delay after save action', async () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080/products'),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
-        // First evaluate call: form check returns true (form still open), second: for other checks
-        evaluate: vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false),
+        evaluate: vi.fn().mockResolvedValue([]), // no empty required fields
       };
       const mockStagehand = {
         act: vi.fn().mockResolvedValue(undefined),
@@ -390,15 +390,18 @@ describe('SpecTestRunner', () => {
       const result = await runner.runStep(step, context);
 
       expect(result.success).toBe(true);
-      // act called twice: initial + retry after form detected still open
-      expect(mockStagehand.act).toHaveBeenCalledTimes(2);
-      expect(mockPage.waitForLoadState).toHaveBeenCalled();
+      // act called once — no retry, just stabilization
+      expect(mockStagehand.act).toHaveBeenCalledTimes(1);
+      // waitForLoadState called for networkidle
+      expect(mockPage.waitForLoadState).toHaveBeenCalledWith('networkidle', { timeout: 3000 });
+      // Snapshots reset after form dismissal for clean check baseline
+      expect(mockTester.clearSnapshots).toHaveBeenCalled();
     });
 
-    it('should NOT trigger post-save wait for non-save actions', async () => {
+    it('should NOT trigger stabilization for non-save actions', async () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080/products'),
-        evaluate: vi.fn().mockResolvedValue(false),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
       };
       const mockStagehand = {
         act: vi.fn().mockResolvedValue(undefined),
@@ -423,15 +426,17 @@ describe('SpecTestRunner', () => {
       const result = await runner.runStep(step, context);
 
       expect(result.success).toBe(true);
-      // act called once — no save retry
+      // act called once — no save stabilization
       expect(mockStagehand.act).toHaveBeenCalledTimes(1);
+      // waitForLoadState NOT called — not a save action
+      expect(mockPage.waitForLoadState).not.toHaveBeenCalled();
     });
 
-    it('should skip retry when form is dismissed after save (no form detected)', async () => {
+    it('should handle networkidle timeout gracefully', async () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080/products'),
-        waitForLoadState: vi.fn().mockResolvedValue(undefined),
-        evaluate: vi.fn().mockResolvedValue(false), // form not visible
+        waitForLoadState: vi.fn().mockRejectedValue(new Error('Timeout')),
+        evaluate: vi.fn().mockResolvedValue([]), // no empty required fields
       };
       const mockStagehand = {
         act: vi.fn().mockResolvedValue(undefined),
@@ -455,9 +460,78 @@ describe('SpecTestRunner', () => {
 
       const result = await runner.runStep(step, context);
 
+      // Still succeeds — networkidle timeout is non-fatal
       expect(result.success).toBe(true);
-      // act called once — form was dismissed, no retry needed
-      expect(mockStagehand.act).toHaveBeenCalledTimes(1);
+      expect(mockTester.clearSnapshots).toHaveBeenCalled();
+    });
+  });
+
+  // --- runStep: auto-fill hook integration ---
+
+  describe('runStep — auto-fill hook integration', () => {
+    it('should call fillEmptyRequiredFields before save/submit actions', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/tickets'),
+        evaluate: vi.fn()
+          .mockResolvedValueOnce([]) // fillEmptyRequiredFields: no empty fields
+          .mockResolvedValue([]),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click the "Submit" button' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      await runner.runStep(step, context);
+
+      // evaluate called = fillEmptyRequiredFields was invoked
+      expect(mockPage.evaluate).toHaveBeenCalled();
+    });
+
+    it('should NOT call fillEmptyRequiredFields for non-submit actions', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/tickets'),
+        evaluate: vi.fn().mockResolvedValue([]),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click the "New Ticket" button' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      await runner.runStep(step, context);
+
+      // evaluate NOT called — non-submit action skips auto-fill
+      expect(mockPage.evaluate).not.toHaveBeenCalled();
     });
   });
 
@@ -760,9 +834,10 @@ describe('SpecTestRunner', () => {
     });
 
     it('should clear session when clearSession is true (default)', async () => {
+      const mockResponse = { ok: () => true };
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080'),
-        goto: vi.fn().mockResolvedValue(undefined),
+        goto: vi.fn().mockResolvedValue(mockResponse),
         evaluate: vi.fn().mockResolvedValue(undefined),
         reload: vi.fn().mockResolvedValue(undefined),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -1241,19 +1316,22 @@ describe('SpecTestRunner', () => {
       ).resolves.toBeDefined();
     });
 
-    it('should execute page.reload when reloadPage option is true', async () => {
+    it('should execute page.reload and clear form fields when reloadPage option is true', async () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080'),
         goto: vi.fn().mockResolvedValue(undefined),
-        evaluate: vi.fn().mockResolvedValue(undefined),
+        // First evaluate: React-compatible field clear, second: check if fields still filled (return false = all cleared)
+        evaluate: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValue(false),
         reload: vi.fn().mockResolvedValue(undefined),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
+        keyboard: { press: vi.fn().mockResolvedValue(undefined) },
       };
       const mockTester = {
         snapshot: vi.fn().mockResolvedValue({ success: true }),
         clearSnapshots: vi.fn(),
       };
       const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
         context: { activePage: vi.fn().mockReturnValue(mockPage) },
       };
 
@@ -1265,6 +1343,41 @@ describe('SpecTestRunner', () => {
 
       expect(mockPage.reload).toHaveBeenCalled();
       expect(mockPage.waitForLoadState).toHaveBeenCalledWith('networkidle');
+      // evaluate called for React-compatible clearing + fields-still-filled check
+      expect(mockPage.evaluate).toHaveBeenCalledTimes(2);
+      // act NOT called — fields were cleared programmatically (no fallback needed)
+      expect(mockStagehand.act).not.toHaveBeenCalled();
+    });
+
+    it('should use triple-click+delete fallback when fields resist programmatic clearing', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080'),
+        goto: vi.fn().mockResolvedValue(undefined),
+        // First evaluate: React-compatible clear, second: fields still have values (true)
+        evaluate: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValue(true),
+        reload: vi.fn().mockResolvedValue(undefined),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+        keyboard: { press: vi.fn().mockResolvedValue(undefined) },
+      };
+      const mockTester = {
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+        clearSnapshots: vi.fn(),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+
+      await runner.runExample({ name: 'Test', steps: [] }, { clearSession: false, reloadPage: true });
+
+      expect(mockPage.reload).toHaveBeenCalled();
+      // act called for triple-click fallback on email and password fields
+      expect(mockStagehand.act).toHaveBeenCalledWith(expect.stringContaining('Triple-click'));
+      expect(mockPage.keyboard.press).toHaveBeenCalledWith('Delete');
     });
 
     it('should NOT call page.reload when reloadPage is false', async () => {
@@ -1361,6 +1474,7 @@ describe('SpecTestRunner', () => {
       const mockTester = {
         clearSnapshots: vi.fn(),
         snapshot: vi.fn().mockResolvedValue({ success: true }),
+        waitFor: vi.fn().mockResolvedValue(true), // Form dismissed immediately
       };
 
       const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
@@ -1368,7 +1482,8 @@ describe('SpecTestRunner', () => {
       (runner as any).tester = mockTester;
       (runner as any).preActUrl = null;
 
-      const step: SpecStep = { type: 'act', instruction: 'Click submit' };
+      // Use non-save instruction to isolate retry behavior from form dismissal
+      const step: SpecStep = { type: 'act', instruction: 'Click the confirm button' };
       const context: StepContext = {
         stepIndex: 0,
         totalSteps: 1,
@@ -1521,6 +1636,407 @@ describe('SpecTestRunner', () => {
       });
 
       expect(() => runner.clearCache()).not.toThrow();
+    });
+  });
+
+  // --- runStep: observe-first select dispatch ---
+
+  describe('runStep — observe-first select dispatch', () => {
+    it('should use selectOption when observe returns method=selectOption (native <select>)', async () => {
+      // This is the real scenario: Stagehand observe() returns method: "selectOption"
+      // for native <select> elements, regardless of selector format (xpath, css, etc.).
+      // The runner should trust this and use Playwright's selectOption() directly.
+      const selectOptionFn = vi.fn().mockResolvedValue(undefined);
+      const firstFn = vi.fn(() => ({ selectOption: selectOptionFn }));
+      const locatorFn = vi.fn(() => ({ first: firstFn }));
+
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/tickets'),
+        locator: locatorFn,
+      };
+      const mockStagehand = {
+        act: vi.fn(),
+        observe: vi.fn().mockResolvedValue([
+          // Real Stagehand returns xpath selectors + method field
+          { selector: 'xpath=/html[1]/body[1]/div[1]/form[1]/select[1]', description: 'Priority dropdown', method: 'selectOption', arguments: ['High'] },
+        ]),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = 'http://localhost:8080/tickets';
+
+      const step: SpecStep = { type: 'act', instruction: 'Select "High" from the priority dropdown' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      expect(mockStagehand.observe).toHaveBeenCalled();
+      // Should use locator().first().selectOption() — NOT act()
+      expect(locatorFn).toHaveBeenCalledWith('xpath=/html[1]/body[1]/div[1]/form[1]/select[1]');
+      expect(selectOptionFn).toHaveBeenCalledWith({ label: 'High' });
+      expect(mockStagehand.act).not.toHaveBeenCalled();
+    });
+
+    it('should use custom dropdown dispatch when observe method is not selectOption', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/tickets'),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        observe: vi.fn().mockResolvedValue([
+          // Custom dropdown — observe returns method: "click" (not selectOption)
+          { selector: '#custom-dropdown', description: 'Status picker', method: 'click', arguments: [] },
+        ]),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = 'http://localhost:8080/tickets';
+
+      const step: SpecStep = { type: 'act', instruction: 'Select "Open" from the status dropdown' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // act() called twice: open dropdown + click option
+      expect(mockStagehand.act).toHaveBeenCalledTimes(2);
+      expect(mockStagehand.act).toHaveBeenCalledWith(expect.stringContaining('open it'));
+      expect(mockStagehand.act).toHaveBeenCalledWith(expect.stringContaining('"Open"'));
+    });
+
+    it('should fall through to trySelectFallback when observe returns no results', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/tickets'),
+        evaluate: vi.fn().mockResolvedValue(true), // DOM fallback succeeds
+      };
+      const mockStagehand = {
+        act: vi.fn(),
+        observe: vi.fn().mockResolvedValue([]), // No observations
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = 'http://localhost:8080/tickets';
+
+      const step: SpecStep = { type: 'act', instruction: 'Select "Open" from the status dropdown' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      expect(mockStagehand.observe).toHaveBeenCalled();
+      expect(mockStagehand.act).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- runStep: SPA navigation detection ---
+
+  describe('runStep — SPA navigation detection', () => {
+    it('should detect SPA navigation and reset snapshots when URL changes after act', async () => {
+      // Simulates: user clicks a ticket row → React Router navigates /tickets → /tickets/123
+      // Stagehand returns success immediately, but the URL changes after the 2s delay.
+      let currentUrl = 'http://localhost:8080/tickets';
+      const mockPage = {
+        url: vi.fn(() => currentUrl),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockImplementation(async () => {
+          // Simulate React Router updating the URL after Stagehand's click
+          currentUrl = 'http://localhost:8080/tickets/123';
+        }),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click on the ticket "Billing inquiry"' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // Snapshots should be reset twice: once before act (baseline), once after navigation
+      expect(mockTester.clearSnapshots).toHaveBeenCalledTimes(2);
+      expect(mockTester.snapshot).toHaveBeenCalledTimes(2);
+    });
+
+    it('should NOT reset snapshots when URL stays the same after act', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/tickets'),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click the "New Ticket" button' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // Snapshots reset only once: before act (baseline). No navigation happened.
+      expect(mockTester.clearSnapshots).toHaveBeenCalledTimes(1);
+      expect(mockTester.snapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it('should skip SPA navigation wait entirely for type/fill instructions', async () => {
+      // Type/fill never triggers navigation — no reason to wait 2s
+      let urlCallCount = 0;
+      const mockPage = {
+        url: vi.fn(() => {
+          urlCallCount++;
+          return 'http://localhost:8080/tickets';
+        }),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Type "Billing inquiry" into the subject field' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const start = Date.now();
+      const result = await runner.runStep(step, context);
+      const elapsed = Date.now() - start;
+
+      expect(result.success).toBe(true);
+      // Should complete fast — no 2s delay for type instructions
+      expect(elapsed).toBeLessThan(1000);
+    });
+  });
+
+  // --- runStep: modal lifecycle handling ---
+
+  describe('runStep — modal lifecycle handling', () => {
+    it('should wait for modal appearance after modal-trigger actions (edit/delete)', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/messages'),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+        waitFor: vi.fn().mockResolvedValue(true), // Modal appeared
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click the "Edit" button on the message' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // waitFor called to check for modal appearance
+      expect(mockTester.waitFor).toHaveBeenCalledWith(
+        expect.stringContaining('modal'),
+        3000
+      );
+    });
+
+    it('should wait for modal dismissal after dismiss actions (confirm/cancel)', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/messages'),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+        waitFor: vi.fn().mockResolvedValue(true), // Modal dismissed
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Click "Confirm" to delete the message' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // waitFor called to check for modal dismissal
+      expect(mockTester.waitFor).toHaveBeenCalledWith(
+        expect.stringContaining('closed'),
+        3000
+      );
+      // Snapshots reset after modal dismissal
+      expect(mockTester.clearSnapshots).toHaveBeenCalled();
+    });
+
+    it('should NOT wait for modals on non-modal actions', async () => {
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:8080/messages'),
+      };
+      const mockStagehand = {
+        act: vi.fn().mockResolvedValue(undefined),
+        context: { activePage: vi.fn().mockReturnValue(mockPage) },
+      };
+      const mockTester = {
+        clearSnapshots: vi.fn(),
+        snapshot: vi.fn().mockResolvedValue({ success: true }),
+        waitFor: vi.fn().mockResolvedValue(true),
+      };
+
+      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
+      (runner as any).stagehand = mockStagehand;
+      (runner as any).tester = mockTester;
+      (runner as any).preActUrl = null;
+
+      const step: SpecStep = { type: 'act', instruction: 'Type "hello" into the message input' };
+      const context: StepContext = {
+        stepIndex: 0, totalSteps: 1, previousResults: [],
+        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
+      };
+
+      const result = await runner.runStep(step, context);
+
+      expect(result.success).toBe(true);
+      // waitFor NOT called — typing is not a modal action
+      expect(mockTester.waitFor).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- port auto-detection ---
+
+  describe('detectPort', () => {
+    it('should keep configured port when app responds on it', async () => {
+      const mockResponse = { ok: () => true };
+      const mockPage = {
+        goto: vi.fn().mockResolvedValue(mockResponse),
+      };
+
+      const result = await detectPort(mockPage as any, 'http://localhost:3000');
+
+      // baseUrl unchanged
+      expect(result).toBe('http://localhost:3000');
+      // Only one goto: the configured port probe
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000', { timeout: 5000 });
+    });
+
+    it('should override baseUrl when app found on alternative port', async () => {
+      const mockPage = {
+        goto: vi.fn()
+          // Configured port 3000 fails
+          .mockRejectedValueOnce(new Error('Connection refused'))
+          // Port 5173 succeeds
+          .mockResolvedValue({ ok: () => true }),
+      };
+
+      const result = await detectPort(mockPage as any, 'http://localhost:3000');
+
+      // baseUrl overridden to 5173
+      expect(result).toBe('http://localhost:5173');
+      // Tried 3000 first, then 5173
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000', { timeout: 5000 });
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:5173', { timeout: 3000 });
+    });
+
+    it('should only run once (portDetected flag)', async () => {
+      const mockResponse = { ok: () => true };
+      const mockPage = {
+        url: vi.fn().mockReturnValue('http://localhost:3000'),
+        goto: vi.fn().mockResolvedValue(mockResponse),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        reload: vi.fn().mockResolvedValue(undefined),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // First call: detectPort probes the port
+      await detectPort(mockPage as any, 'http://localhost:3000');
+      const gotoCallCountAfterDetect = mockPage.goto.mock.calls.length;
+
+      // resetSession just does about:blank → baseUrl → clear → reload (no port probing)
+      await resetSession(mockPage as any, 'http://localhost:3000');
+
+      // goto called for about:blank + baseUrl in reset, but NOT for detectPort probe
+      const newCalls = mockPage.goto.mock.calls.slice(gotoCallCountAfterDetect);
+      const detectPortCalls = newCalls.filter(
+        (call: any[]) => call[1]?.timeout !== undefined
+      );
+      expect(detectPortCalls).toHaveLength(0);
     });
   });
 });
