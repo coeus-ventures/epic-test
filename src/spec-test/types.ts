@@ -304,6 +304,8 @@ export interface StepContext {
   stagehand: Stagehand;
   /** Tester instance */
   tester: Tester;
+  /** Next step in the sequence (for look-ahead decisions like modal auto-confirm) */
+  nextStep?: SpecStep;
   /** Current behavior ID (for credential tracking) */
   currentBehaviorId?: string;
   /** Credential tracker (for Sign Up/Sign In) */

@@ -530,8 +530,12 @@ describe('SpecTestRunner', () => {
 
       await runner.runStep(step, context);
 
-      // evaluate NOT called — non-submit action skips auto-fill
-      expect(mockPage.evaluate).not.toHaveBeenCalled();
+      // evaluate may be called by dismissLeftoverModal (modal detection),
+      // but NOT by fillEmptyRequiredFields (form filler scans for required fields)
+      const formFillerCalls = mockPage.evaluate.mock.calls.filter(
+        (call: unknown[]) => typeof call[0] === 'function' && String(call[0]).includes('required')
+      );
+      expect(formFillerCalls).toHaveLength(0);
     });
   });
 
@@ -1877,6 +1881,8 @@ describe('SpecTestRunner', () => {
     it('should wait for modal appearance after modal-trigger actions (edit/delete)', async () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080/messages'),
+        evaluate: vi.fn().mockResolvedValue(null), // No modal found by DOM poll
+        keyboard: { press: vi.fn().mockResolvedValue(undefined) },
       };
       const mockStagehand = {
         act: vi.fn().mockResolvedValue(undefined),
@@ -1885,7 +1891,7 @@ describe('SpecTestRunner', () => {
       const mockTester = {
         clearSnapshots: vi.fn(),
         snapshot: vi.fn().mockResolvedValue({ success: true }),
-        waitFor: vi.fn().mockResolvedValue(true), // Modal appeared
+        waitFor: vi.fn().mockResolvedValue(true), // Modal appeared via LLM
       };
 
       const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
@@ -1902,16 +1908,18 @@ describe('SpecTestRunner', () => {
       const result = await runner.runStep(step, context);
 
       expect(result.success).toBe(true);
-      // waitFor called to check for modal appearance
+      // DOM poll returns null (no modal), then LLM fallback fires with 1500ms timeout
       expect(mockTester.waitFor).toHaveBeenCalledWith(
         expect.stringContaining('modal'),
-        3000
+        1500
       );
     });
 
     it('should wait for modal dismissal after dismiss actions (confirm/cancel)', async () => {
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080/messages'),
+        evaluate: vi.fn().mockResolvedValue(null), // No modal found by DOM poll
+        keyboard: { press: vi.fn().mockResolvedValue(undefined) },
       };
       const mockStagehand = {
         act: vi.fn().mockResolvedValue(undefined),
@@ -1920,7 +1928,7 @@ describe('SpecTestRunner', () => {
       const mockTester = {
         clearSnapshots: vi.fn(),
         snapshot: vi.fn().mockResolvedValue({ success: true }),
-        waitFor: vi.fn().mockResolvedValue(true), // Modal dismissed
+        waitFor: vi.fn().mockResolvedValue(true),
       };
 
       const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
@@ -1937,11 +1945,7 @@ describe('SpecTestRunner', () => {
       const result = await runner.runStep(step, context);
 
       expect(result.success).toBe(true);
-      // waitFor called to check for modal dismissal
-      expect(mockTester.waitFor).toHaveBeenCalledWith(
-        expect.stringContaining('closed'),
-        3000
-      );
+      // DOM poll finds no modal → returns early (modal already dismissed)
       // Snapshots reset after modal dismissal
       expect(mockTester.clearSnapshots).toHaveBeenCalled();
     });

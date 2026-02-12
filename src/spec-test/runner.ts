@@ -43,6 +43,7 @@ import {
   waitForModalDismissal,
 } from "./act-helpers";
 import { tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
+import { dismissLeftoverModal, shouldAutoConfirmModal, autoConfirmModal } from "./modal-handler";
 
 /**
  * Main class for parsing and executing behavior specifications against a running application.
@@ -281,6 +282,7 @@ export class SpecTestRunner {
           page,
           stagehand,
           tester,
+          nextStep: example.steps[i + 1],
         };
 
         const stepResult = await this.runStep(step, context);
@@ -337,6 +339,9 @@ export class SpecTestRunner {
     if (step.type === "act") {
       this.preActUrl = page.url();
 
+      // Dismiss leftover modals from previous steps before taking baseline
+      await dismissLeftoverModal(page);
+
       // Fresh "before" baseline for upcoming Check steps
       tester.clearSnapshots();
       await tester.snapshot(page);
@@ -392,6 +397,15 @@ export class SpecTestRunner {
           await waitForModalDismissal(tester, page);
         } else if (isModalTriggerAction(step.instruction)) {
           await waitForModalAppearance(tester, page);
+          // Auto-confirm if spec doesn't have an explicit confirm step next
+          if (shouldAutoConfirmModal(step, context.nextStep)) {
+            const confirmed = await autoConfirmModal(page, stagehand);
+            if (confirmed) {
+              console.log(`[runStep] Auto-confirmed modal for: "${step.instruction.slice(0, 60)}..."`);
+              tester.clearSnapshots();
+              await tester.snapshot(page);
+            }
+          }
         }
       }
 
@@ -411,6 +425,9 @@ export class SpecTestRunner {
     }
 
     // === CHECK STEP ===
+
+    // Dismiss any leftover modal before checking page state
+    await dismissLeftoverModal(page);
 
     // Try deterministic text verification first (fast path)
     const deterministicResult = await tryDeterministicCheck(page, step, stepStart);

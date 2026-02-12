@@ -46,6 +46,10 @@ export { delay, isRetryableError, executePageAction, executeActWithRetry, execut
 // --- Check Helpers ---
 export { EXTRACT_EVALUATION_PROMPT, doubleCheckWithExtract, tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
 
+// --- Modal Handler ---
+export { detectModalInDOM, autoConfirmModal, dismissLeftoverModal, shouldAutoConfirmModal } from "./modal-handler";
+export type { ModalDetection } from "./modal-handler";
+
 // --- Verification Context ---
 export { VerificationContext } from "./verification-context";
 

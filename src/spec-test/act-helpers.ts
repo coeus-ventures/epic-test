@@ -14,6 +14,7 @@ import {
   MAX_RETRIES,
   RETRY_DELAY,
 } from "./step-execution";
+import { detectModalInDOM } from "./modal-handler";
 
 /** Delay helper for retry and stabilization logic. */
 export function delay(ms: number): Promise<void> {
@@ -253,16 +254,26 @@ export async function waitForFormDismissal(page: Page): Promise<void> {
 
 /**
  * Wait for a modal/dialog to appear after a trigger action (edit, delete, etc.).
+ * DOM-first polling (4x500ms = 2s) with LLM fallback for non-standard modals.
  * Non-fatal on timeout — not all trigger actions produce modals.
  */
 export async function waitForModalAppearance(tester: Tester, page: Page): Promise<void> {
+  // Fast DOM poll: 4 attempts × 500ms = 2s max
+  for (let i = 0; i < 4; i++) {
+    const modal = await detectModalInDOM(page);
+    if (modal) {
+      console.log(`[waitForModalAppearance] Modal detected via DOM: ${modal.selector}`);
+      return;
+    }
+    await delay(500);
+  }
+  // LLM fallback for custom/non-standard modals
   try {
     await tester.waitFor(
-      "A modal, dialog, confirmation popup, or overlay has appeared on the page. " +
-      "There are action buttons like Confirm, Cancel, Save, Delete, or Close visible inside it.",
-      3000
+      "A modal, dialog, confirmation popup, or overlay has appeared on the page.",
+      1500
     );
-    console.log(`[waitForModalAppearance] Modal detected`);
+    console.log(`[waitForModalAppearance] Modal detected via LLM`);
   } catch {
     // No modal appeared — action may have completed directly (no confirmation needed)
   }
@@ -270,16 +281,28 @@ export async function waitForModalAppearance(tester: Tester, page: Page): Promis
 
 /**
  * Wait for a modal/dialog to close after a dismiss action (confirm, cancel, etc.).
+ * DOM-first polling (4x300ms = 1.2s) with LLM fallback.
  * Non-fatal on timeout. Resets snapshots after dismissal for clean check baseline.
  */
 export async function waitForModalDismissal(tester: Tester, page: Page): Promise<void> {
+  // Fast DOM poll: check if modal is gone
+  for (let i = 0; i < 4; i++) {
+    const modal = await detectModalInDOM(page);
+    if (!modal) {
+      console.log(`[waitForModalDismissal] Modal dismissed (confirmed via DOM)`);
+      tester.clearSnapshots();
+      await tester.snapshot(page);
+      return;
+    }
+    await delay(300);
+  }
+  // LLM fallback for non-standard modals
   try {
     await tester.waitFor(
-      "The modal, dialog, or popup that was previously visible has been closed. " +
-      "The page content behind it is now accessible.",
-      3000
+      "The modal, dialog, or popup that was previously visible has been closed.",
+      1500
     );
-    console.log(`[waitForModalDismissal] Modal dismissed`);
+    console.log(`[waitForModalDismissal] Modal dismissed (confirmed via LLM)`);
   } catch {
     // Modal didn't close — possible silent failure
   }
