@@ -79,22 +79,24 @@ export async function trySelectFallback(page: Page, instruction: string): Promis
   try {
     const result = await page.evaluate((targetValue: string) => {
       const selects = Array.from(document.querySelectorAll('select'));
-      for (const select of selects) {
-        const rect = select.getBoundingClientRect();
-        if (rect.height === 0 || rect.width === 0) continue;
+      const isVisible = (el: Element) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return r.height > 0 && r.width > 0;
+      };
+      const matchesValue = (opt: HTMLOptionElement) =>
+        opt.text.trim().toLowerCase() === targetValue.toLowerCase() ||
+        opt.value.toLowerCase() === targetValue.toLowerCase();
 
-        const options = Array.from(select.options);
-        const match = options.find(opt =>
-          opt.text.trim().toLowerCase() === targetValue.toLowerCase() ||
-          opt.value.toLowerCase() === targetValue.toLowerCase()
-        );
+      const visibleSelect = selects.find(select =>
+        isVisible(select) && Array.from(select.options).some(matchesValue)
+      );
 
-        if (match) {
-          select.value = match.value;
-          select.dispatchEvent(new Event('change', { bubbles: true }));
-          select.dispatchEvent(new Event('input', { bubbles: true }));
-          return true;
-        }
+      if (visibleSelect) {
+        const match = Array.from(visibleSelect.options).find(matchesValue)!;
+        visibleSelect.value = match.value;
+        visibleSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        visibleSelect.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
       }
       return false;
     }, selectAction.value);
@@ -145,11 +147,13 @@ export async function executeSelectAction(
     if (isNativeSelect) {
       try {
         await page.locator(selector).first().selectOption({ label: value });
+        await delay(500); // Let React/Vue re-render conditional UI
         console.log(`[executeSelectAction] selectOption(label: "${value}") succeeded`);
         return { success: true, duration: Date.now() - startTime, pageUrl: page.url() };
       } catch {
         try {
           await page.locator(selector).first().selectOption(value);
+          await delay(500); // Let React/Vue re-render conditional UI
           console.log(`[executeSelectAction] selectOption("${value}") succeeded`);
           return { success: true, duration: Date.now() - startTime, pageUrl: page.url() };
         } catch {
@@ -164,6 +168,7 @@ export async function executeSelectAction(
         await stagehand.act(`Click on the ${observation.description || 'dropdown'} to open it`);
         await delay(300);
         await stagehand.act(`Click the option "${value}" in the dropdown list`);
+        await delay(500); // Let React/Vue re-render conditional UI
         console.log(`[executeSelectAction] Custom dropdown dispatch succeeded for "${value}"`);
         return { success: true, duration: Date.now() - startTime, pageUrl: page.url() };
       } catch {
@@ -178,8 +183,27 @@ export async function executeSelectAction(
 }
 
 /**
+ * Enhance an instruction with visible page context from stagehand.observe().
+ * Used on retry attempts to help Stagehand map semantic instructions to actual elements.
+ */
+async function enhanceWithPageContext(
+  instruction: string, stagehand: Stagehand
+): Promise<string> {
+  try {
+    const observations = await stagehand.observe(instruction);
+    if (observations.length > 0) {
+      const context = observations.slice(0, 8).map(o => o.description).join('; ');
+      return `${instruction}. Elements visible on the page: ${context}`;
+    }
+  } catch { /* observe failed, return original */ }
+  return instruction;
+}
+
+/**
  * Execute an Act step with retry logic for transient errors.
- * On final failure, attempts modal dismissal (Escape) before giving up.
+ * On retry attempts (2+), enriches the instruction with observed page context
+ * to help Stagehand map semantic instructions to actual UI elements.
+ * On final failure, attempts modal dismissal (Escape) if a modal is detected.
  */
 export async function executeActWithRetry(
   instruction: string,
@@ -192,7 +216,12 @@ export async function executeActWithRetry(
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     lastAttempt = attempt;
     try {
-      const result = await executeActStep(instruction, stagehand);
+      // On retries, enrich the instruction with visible element descriptions
+      const currentInstruction = attempt === 1
+        ? instruction
+        : await enhanceWithPageContext(instruction, stagehand);
+
+      const result = await executeActStep(currentInstruction, stagehand);
       if (result.success) return result;
 
       lastFailedResult = result;
@@ -221,19 +250,127 @@ export async function executeActWithRetry(
     }
   }
 
-  // All retries exhausted — try dismissing a modal/overlay and retry once
-  const modalRetry = await tryDismissModalAndRetry(instruction, stagehand, page);
-  if (modalRetry) return modalRetry;
+  // All retries exhausted — try dismissing a modal/overlay if one is detected
+  const modal = await detectModalInDOM(page);
+  if (modal) {
+    const modalRetry = await tryDismissModalAndRetry(instruction, stagehand, page);
+    if (modalRetry) return modalRetry;
+  }
 
-  // Try select/dropdown DOM fallback as last resort
+  // Try select/dropdown DOM fallback
   const selectFallback = await trySelectFallback(page, instruction);
   if (selectFallback) return selectFallback;
+
+  // DOM text-click fallback for elements not in the accessibility tree
+  // (e.g., styled buttons without ARIA roles, radio buttons)
+  const domClick = await tryDOMTextClick(page, instruction);
+  if (domClick) return domClick;
 
   return lastFailedResult ?? {
     success: false,
     duration: 0,
     error: await getEnhancedErrorContext(page, instruction, lastAttempt),
   };
+}
+
+/**
+ * DOM-based fallback for elements not captured by the accessibility tree.
+ * When Stagehand can't find an element via a11y (e.g., NPS rating scales, styled
+ * buttons without ARIA roles, radio buttons), this tries multiple DOM strategies:
+ * 1. Click visible elements whose text content matches the target
+ * 2. Click radio/checkbox inputs whose value or label matches
+ * 3. Set number/range input values
+ */
+async function tryDOMTextClick(page: Page, instruction: string): Promise<ActResult | null> {
+  if (!/\b(click|press|tap|select|choose|pick|rate|score)\b/i.test(instruction)) return null;
+
+  const quotedMatch = instruction.match(/["']([^"']+)["']/);
+  const numberMatch = instruction.match(/\b(\d{1,2})\b/);
+  const target = quotedMatch?.[1] || numberMatch?.[1];
+  if (!target) return null;
+
+  try {
+    const result = await page.evaluate((text: string) => {
+      const isVisible = (el: Element) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return r.height > 0 && r.width > 0;
+      };
+
+      // Strategy 1: Click elements by text content (leaf nodes first, then any)
+      const clickable = Array.from(document.querySelectorAll(
+        'button, [role="button"], label, span, div, a, li, td, th, p'
+      ));
+
+      const leafMatch = clickable.find(el =>
+        isVisible(el) && el.textContent?.trim() === text && el.children.length === 0
+      );
+      if (leafMatch) { (leafMatch as HTMLElement).click(); return 'text-leaf'; }
+
+      const wrapperMatch = clickable.find(el =>
+        isVisible(el) && el.textContent?.trim() === text
+      );
+      if (wrapperMatch) { (wrapperMatch as HTMLElement).click(); return 'text-wrapper'; }
+
+      // Strategy 2: Click radio/checkbox by value or associated label
+      const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(
+        'input[type="radio"], input[type="checkbox"]'
+      ));
+      const radioMatch = inputs.find(input =>
+        input.value === text || input.labels?.[0]?.textContent?.trim() === text
+      );
+      if (radioMatch) {
+        radioMatch.click();
+        return radioMatch.value === text ? 'radio-value' : 'radio-label';
+      }
+
+      // Strategy 3: Set number/range input value
+      const numValue = Number(text);
+      if (!isNaN(numValue)) {
+        const numInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
+          'input[type="number"], input[type="range"]'
+        ));
+        const numInput = numInputs.find(input => {
+          if (!isVisible(input)) return false;
+          const min = Number(input.min || 0);
+          const max = Number(input.max || 100);
+          return numValue >= min && numValue <= max;
+        });
+
+        if (numInput) {
+          const setter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+          )?.set;
+          if (setter) setter.call(numInput, String(numValue));
+          else numInput.value = String(numValue);
+          numInput.dispatchEvent(new Event('input', { bubbles: true }));
+          numInput.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'number-input';
+        }
+      }
+
+      // Strategy 4: Click elements with aria-label or data-value attributes matching
+      const ariaElements = Array.from(document.querySelectorAll('[aria-label], [data-value]'));
+      const ariaMatch = ariaElements.find(el => {
+        if (!isVisible(el)) return false;
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const dataValue = el.getAttribute('data-value') || '';
+        return ariaLabel === text || dataValue === text;
+      });
+      if (ariaMatch) { (ariaMatch as HTMLElement).click(); return 'aria-data'; }
+
+      return null;
+    }, target);
+
+    if (result) {
+      console.log(`[tryDOMTextClick] Success via ${result} strategy for "${target}"`);
+      await delay(1000);
+      return { success: true, duration: 0, pageUrl: page.url() };
+    }
+  } catch (e) {
+    console.log(`[tryDOMTextClick] DOM fallback failed for "${target}": ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  return null;
 }
 
 // ============================================================================

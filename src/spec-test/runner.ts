@@ -27,7 +27,6 @@ import {
   isSaveAction,
   isModalTriggerAction,
   isModalDismissAction,
-  extractNavigationTarget,
   extractSelectAction,
   generateFailureContext,
 } from "./step-execution";
@@ -44,6 +43,9 @@ import {
 } from "./act-helpers";
 import { tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
 import { dismissLeftoverModal, shouldAutoConfirmModal, autoConfirmModal } from "./modal-handler";
+
+/** Time to wait for SPA route transitions to settle (React Router, Vue Router, etc.) */
+const SPA_NAVIGATION_SETTLE_MS = 2000;
 
 /**
  * Main class for parsing and executing behavior specifications against a running application.
@@ -264,7 +266,7 @@ export class SpecTestRunner {
         console.log(`[runExample] Reloading page to clean form state`);
         await page.reload();
         await page.waitForLoadState('networkidle');
-        await clearFormFields(page, stagehand);
+        await clearFormFields(page);
       }
 
       // Take initial snapshot for B-Test diff-based assertions
@@ -302,27 +304,7 @@ export class SpecTestRunner {
         failedAt,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const fallbackStep = example.steps[0] ?? { type: "act" as const, instruction: "initialize" };
-
-      return {
-        example,
-        success: false,
-        steps: [],
-        duration: Date.now() - startTime,
-        failedAt: {
-          stepIndex: 0,
-          step: fallbackStep,
-          context: {
-            pageSnapshot: "",
-            pageUrl: "",
-            failedStep: fallbackStep,
-            error: errorMessage,
-            availableElements: [],
-            suggestions: ["Browser or page initialization failed"],
-          },
-        },
-      };
+      return this.buildCrashResult(example, startTime, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -378,7 +360,7 @@ export class SpecTestRunner {
       // trigger SPA navigation (React Router, Vue Router). Type/fill/select never navigate.
       if (actResult.success && /\b(click|press|tap)\b/i.test(step.instruction)
           && !isSaveAction(step.instruction) && !isModalDismissAction(step.instruction) && !isModalTriggerAction(step.instruction)) {
-        await delay(2000);
+        await delay(SPA_NAVIGATION_SETTLE_MS);
         const postActUrl = page.url();
         if (this.preActUrl && postActUrl !== this.preActUrl) {
           console.log(`[runStep] SPA navigation detected: ${this.preActUrl} → ${postActUrl}`);
@@ -389,36 +371,7 @@ export class SpecTestRunner {
 
       // Post-action stabilization — wait for form/modal lifecycle events
       if (actResult.success) {
-        if (isSaveAction(step.instruction)) {
-          await waitForFormDismissal(page);
-          tester.clearSnapshots();
-          await tester.snapshot(page);
-        } else if (isModalDismissAction(step.instruction)) {
-          await waitForModalDismissal(tester, page);
-        } else if (isModalTriggerAction(step.instruction)) {
-          await waitForModalAppearance(tester, page);
-          // Auto-confirm if spec doesn't have an explicit confirm step next
-          if (shouldAutoConfirmModal(step, context.nextStep)) {
-            const confirmed = await autoConfirmModal(page, stagehand);
-            if (confirmed) {
-              console.log(`[runStep] Auto-confirmed modal for: "${step.instruction.slice(0, 60)}..."`);
-              tester.clearSnapshots();
-              await tester.snapshot(page);
-            }
-          }
-        }
-      }
-
-      // Redundant navigation fallback: if act failed and it's a UI navigation action
-      if (!actResult.success) {
-        const navTarget = extractNavigationTarget(step.instruction);
-        if (navTarget) {
-          const currentPath = new URL(page.url()).pathname.toLowerCase();
-          if (currentPath.includes(navTarget)) {
-            console.log(`[runStep] Act failed but URL "${currentPath}" already contains "${navTarget}" — treating as successful no-op`);
-            return { step, success: true, duration: Date.now() - stepStart, actResult: { success: true, duration: Date.now() - stepStart, pageUrl: page.url() } };
-          }
-        }
+        await this.handlePostActStabilization(step, tester, page, stagehand, context.nextStep);
       }
 
       return { step, success: actResult.success, duration: Date.now() - stepStart, actResult };
@@ -443,6 +396,52 @@ export class SpecTestRunner {
     );
 
     return { step, success: checkResult.passed, duration: Date.now() - stepStart, checkResult };
+  }
+
+  /** Build a crash-safe ExampleResult when browser/page initialization fails. */
+  private buildCrashResult(example: SpecExample, startTime: number, errorMessage: string): ExampleResult {
+    const fallbackStep = example.steps[0] ?? { type: "act" as const, instruction: "initialize" };
+    return {
+      example,
+      success: false,
+      steps: [],
+      duration: Date.now() - startTime,
+      failedAt: {
+        stepIndex: 0,
+        step: fallbackStep,
+        context: {
+          pageSnapshot: "",
+          pageUrl: "",
+          failedStep: fallbackStep,
+          error: errorMessage,
+          availableElements: [],
+          suggestions: ["Browser or page initialization failed"],
+        },
+      },
+    };
+  }
+
+  /** Post-action stabilization — wait for form/modal lifecycle events after a successful Act. */
+  private async handlePostActStabilization(
+    step: SpecStep, tester: Tester, page: Page, stagehand: Stagehand, nextStep?: SpecStep
+  ): Promise<void> {
+    if (isSaveAction(step.instruction)) {
+      await waitForFormDismissal(page);
+      tester.clearSnapshots();
+      await tester.snapshot(page);
+    } else if (isModalDismissAction(step.instruction)) {
+      await waitForModalDismissal(tester, page);
+    } else if (isModalTriggerAction(step.instruction)) {
+      await waitForModalAppearance(tester, page);
+      if (shouldAutoConfirmModal(step, nextStep)) {
+        const confirmed = await autoConfirmModal(page, stagehand);
+        if (confirmed) {
+          console.log(`[runStep] Auto-confirmed modal for: "${step.instruction.slice(0, 60)}..."`);
+          tester.clearSnapshots();
+          await tester.snapshot(page);
+        }
+      }
+    }
   }
 
   /** Close browser and clean up resources. */

@@ -6,7 +6,6 @@ import {
   isModalTriggerAction,
   isModalDismissAction,
   extractExpectedText,
-  extractNavigationTarget,
   extractSelectAction,
   executeActStep,
   executeCheckStep,
@@ -174,52 +173,6 @@ describe('isModalDismissAction', () => {
   it('should NOT match regular save (without modal/dialog context)', () => {
     expect(isModalDismissAction('Click the "Save" button')).toBe(false);
     expect(isModalDismissAction('Click Submit')).toBe(false);
-  });
-});
-
-describe('extractNavigationTarget', () => {
-  it('should detect "Click X in the navigation" pattern', () => {
-    expect(extractNavigationTarget('Click the Contacts button in the navigation')).toBe('contacts');
-  });
-
-  it('should detect "Click X in the sidebar" pattern', () => {
-    expect(extractNavigationTarget('Click Jobs in the sidebar')).toBe('jobs');
-  });
-
-  it('should detect "Click X in the menu" pattern', () => {
-    expect(extractNavigationTarget('Click Dashboard in the menu')).toBe('dashboard');
-  });
-
-  it('should detect "Click X in the header" pattern', () => {
-    expect(extractNavigationTarget('Click Dashboard in the header')).toBe('dashboard');
-  });
-
-  it('should detect "Click X item in the left panel" pattern', () => {
-    expect(extractNavigationTarget('Click Candidates item in the left panel')).toBe('candidates');
-  });
-
-  it('should detect "Navigate to X page" pattern', () => {
-    expect(extractNavigationTarget('Navigate to the Settings page')).toBe('settings');
-  });
-
-  it('should detect "Go to X section" pattern', () => {
-    expect(extractNavigationTarget('Go to the Candidates section')).toBe('candidates');
-  });
-
-  it('should detect "Go to X page" pattern', () => {
-    expect(extractNavigationTarget('Go to the Tasks page')).toBe('tasks');
-  });
-
-  it('should detect "Navigate to X section" pattern', () => {
-    expect(extractNavigationTarget('Navigate to the Reports section')).toBe('reports');
-  });
-
-  it('should return null for non-navigation actions', () => {
-    expect(extractNavigationTarget('Click the Submit button')).toBeNull();
-    expect(extractNavigationTarget('Click the "Add" button')).toBeNull();
-    expect(extractNavigationTarget('Type "hello" into the search field')).toBeNull();
-    expect(extractNavigationTarget('Select "Option A" from dropdown')).toBeNull();
-    expect(extractNavigationTarget('Check the "Agree" checkbox')).toBeNull();
   });
 });
 

@@ -224,7 +224,7 @@ describe('verifyBehaviorWithDependencies', () => {
     expect(runner.runExample).toHaveBeenCalledTimes(3);
   });
 
-  it('skips navigation for target behavior when intermediate deps built context', async () => {
+  it('navigates for target behavior even when intermediate deps exist', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     const signUp: HarborBehavior = {
       id: 'sign-up',
@@ -276,10 +276,12 @@ describe('verifyBehaviorWithDependencies', () => {
       navigateToPath: '/projects',
     });
 
-    // Create Issue (target with intermediate deps): clearSession=false, NO navigateToPath
-    // The dependency chain built the page context — don't override it
-    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false });
-    expect(runner.runExample.mock.calls[2][1].navigateToPath).toBeUndefined();
+    // Create Issue (target with intermediate deps): clearSession=false, navigateToPath=/projects
+    // Target behavior always navigates to its page, just like intermediate deps
+    expect(runner.runExample.mock.calls[2][1]).toMatchObject({
+      clearSession: false,
+      navigateToPath: '/projects',
+    });
   });
 
   it('navigates for target behavior in short chains (Sign Up → target only)', async () => {

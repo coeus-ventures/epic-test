@@ -82,7 +82,7 @@ export async function resetSession(page: Page, baseUrl: string): Promise<void> {
   // 4. Reload so the SPA re-initializes reading the now-empty storage.
   await page.reload();
   await page.waitForLoadState('networkidle');
-  console.log(`[runExample] Hard reset complete. Page URL: ${page.url()}`);
+  console.log(`[resetSession] Hard reset complete. Page URL: ${page.url()}`);
 }
 
 /** Attempt to re-authenticate by filling the sign-in form. */
@@ -122,32 +122,26 @@ export async function navigateToPagePath(
   stagehand?: Stagehand,
   credentials?: { email: string | null; password: string | null }
 ): Promise<void> {
-  const targetUrl = `${baseUrl.replace(/\/$/, '')}${pagePath}`;
+  // Resolve parameterized routes to their parent path (e.g., /surveys/:id → /surveys)
+  // The behavior's steps handle navigating to the specific instance.
+  let resolvedPath = pagePath;
+  if (/:\w+/.test(resolvedPath)) {
+    resolvedPath = resolvedPath.replace(/\/:[^/]+/g, '');
+    if (!resolvedPath || resolvedPath === '/') {
+      console.log(`[navigateToPagePath] Route "${pagePath}" resolves to root, skipping navigation`);
+      return;
+    }
+    console.log(`[navigateToPagePath] Parameterized route "${pagePath}" → resolved to parent "${resolvedPath}"`);
+  }
+
+  const targetUrl = `${baseUrl.replace(/\/$/, '')}${resolvedPath}`;
   const currentUrl = page.url();
 
   // Skip if already on the target URL
   if (urlsMatch(currentUrl, targetUrl)) {
-    console.log(`[navigateToPagePath] Already on ${pagePath}, skipping navigation`);
+    console.log(`[navigateToPagePath] Already on ${resolvedPath}, skipping navigation`);
     return;
   }
-
-  // Skip parameterized routes (e.g., /products/:id) — trust dependency chain navigation
-  if (/:\w+/.test(pagePath)) {
-    console.log(`[navigateToPagePath] Parameterized route "${pagePath}", skipping navigation (trusting dependency chain)`);
-    return;
-  }
-
-  // Skip if already in a child path of the target — dependency chain built this context.
-  // e.g., on /projects/123/issues and target is /projects → don't navigate back to parent.
-  // This prevents losing sub-page context established by dependency chains.
-  try {
-    const currentPath = new URL(currentUrl).pathname.replace(/\/$/, '');
-    const normalizedTarget = pagePath.replace(/\/$/, '');
-    if (currentPath.startsWith(normalizedTarget + '/')) {
-      console.log(`[navigateToPagePath] Already in child path "${currentPath}" of "${normalizedTarget}", skipping navigation (preserving dependency chain context)`);
-      return;
-    }
-  } catch { /* invalid URL, proceed with navigation */ }
 
   // Soft navigation (avoids full reload, preserves SPA state)
   console.log(`[navigateToPagePath] Soft-navigating to ${targetUrl}`);
@@ -169,9 +163,11 @@ export async function navigateToPagePath(
  * Uses native value setters to trigger framework change tracking,
  * then falls back to triple-click + delete for resistant fields.
  */
-export async function clearFormFields(page: Page, stagehand: Stagehand): Promise<void> {
+export async function clearFormFields(page: Page): Promise<void> {
+  const FIELD_SELECTOR = 'input:not([type="hidden"]), textarea';
+
   // Programmatic clearing via native value setters
-  await page.evaluate(() => {
+  await page.evaluate((selector: string) => {
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype, 'value'
     )?.set;
@@ -179,7 +175,7 @@ export async function clearFormFields(page: Page, stagehand: Stagehand): Promise
       window.HTMLTextAreaElement.prototype, 'value'
     )?.set;
 
-    Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea')).forEach(el => {
+    Array.from(document.querySelectorAll(selector)).forEach(el => {
       const input = el as HTMLInputElement | HTMLTextAreaElement;
       input.focus();
 
@@ -193,26 +189,39 @@ export async function clearFormFields(page: Page, stagehand: Stagehand): Promise
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
-  }).catch(() => {});
+  }, FIELD_SELECTOR).catch(() => {});
 
   // Fallback: triple-click + delete for fields that resist programmatic clearing
   try {
-    const fieldsStillFilled = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-        'input:not([type="hidden"]), textarea'
-      ));
+    const fieldsStillFilled = await page.evaluate((sel: string) => {
+      const inputs = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(sel));
       return inputs.some(el => {
         const rect = el.getBoundingClientRect();
         return rect.height > 0 && rect.width > 0 && el.value.length > 0;
       });
-    });
+    }, FIELD_SELECTOR);
 
     if (fieldsStillFilled) {
       console.log(`[clearFormFields] Fields still have values after programmatic clear — using triple-click+delete fallback`);
-      await stagehand.act('Triple-click on the email input field to select all text').catch(() => {});
-      await page.keyboard.press('Delete').catch(() => {});
-      await stagehand.act('Triple-click on the password input field to select all text').catch(() => {});
-      await page.keyboard.press('Delete').catch(() => {});
+      const filledSelectors = await page.evaluate((sel: string) => {
+        const inputs = Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(sel));
+        return inputs
+          .filter(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.height > 0 && rect.width > 0 && el.value.length > 0;
+          })
+          .map((el, i) => {
+            if (el.id) return `#${el.id}`;
+            if (el.name) return `[name="${el.name}"]`;
+            return `input:not([type="hidden"]):nth-of-type(${i + 1})`;
+          });
+      }, FIELD_SELECTOR);
+      for (const selector of filledSelectors) {
+        try {
+          await page.locator(selector).first().click({ clickCount: 3 });
+          await page.keyboard.press('Delete');
+        } catch { /* skip this field */ }
+      }
     }
   } catch { /* fallback failed, proceed anyway */ }
 }

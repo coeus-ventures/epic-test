@@ -14,8 +14,8 @@ import { buildDependencyChain } from "./dependency-chain";
  * - Each behavior's steps start on its own page (no sign-in preamble)
  * - The chain is: Sign Up (creates account + logs in) → target behavior
  * - Only the first chain step (Sign Up) clears browser state
- * - Subsequent steps preserve localStorage/cookies so the SPA session survives
- * - NO page.goto() for non-first steps (would kill React in-memory auth state)
+ * - Subsequent steps preserve localStorage/cookies via soft navigation
+ * - Parameterized routes (e.g., /surveys/:id) resolve to parent path (/surveys)
  */
 export async function verifyBehaviorWithDependencies(
   targetBehavior: HarborBehavior,
@@ -67,20 +67,16 @@ export async function verifyBehaviorWithDependencies(
 
     // Navigation strategy for dependency chains:
     // - First step (Sign Up): clears session, navigates to baseUrl via resetSession()
-    // - Intermediate deps: navigate to their pagePath (they need to reach their page)
-    // - Target behavior: skip navigation when intermediate deps built page context,
-    //   because deps progressively navigate deeper into the app hierarchy.
-    //   navigateToPagePath() also has child-path detection as a safety net.
-    const isTargetBehavior = behavior.id === targetBehavior.id;
-    const hasIntermediateDeps = chain.length > 2; // more than just [Sign Up, target]
-    const skipNavigation = isFirstInChain || !behavior.pagePath || (isTargetBehavior && hasIntermediateDeps);
+    // - All subsequent steps: navigate to their pagePath so they start on the right page.
+    //   For parameterized routes (e.g., /surveys/:id), navigateToPagePath() resolves
+    //   to the parent path (e.g., /surveys) — the behavior's steps handle instance selection.
+    const skipNavigation = isFirstInChain || !behavior.pagePath;
     const navigateToPath = skipNavigation ? undefined : behavior.pagePath;
 
-    console.log(`Chain [${chainIndex}/${chain.length - 1}] ${behavior.id}: ${processedSteps.length} steps, email=${creds.email ?? '(none)'}${navigateToPath ? `, navigateTo=${navigateToPath}` : ''}${isTargetBehavior && hasIntermediateDeps ? ' (skip nav: deps built context)' : ''}`);
+    console.log(`Chain [${chainIndex}/${chain.length - 1}] ${behavior.id}: ${processedSteps.length} steps, email=${creds.email ?? '(none)'}${navigateToPath ? `, navigateTo=${navigateToPath}` : ''}`);
 
     // Execute: only clear session for the first chain step.
     // For subsequent steps, navigate to the behavior's page path if available.
-    // navigateToPagePath() will also skip if already in a child path of the target.
     const exampleToRun = { ...example, steps: processedSteps };
     let result: ExampleResult;
     try {
@@ -112,11 +108,9 @@ export async function verifyBehaviorWithDependencies(
 
     // Capture credentials after Sign Up (from processed steps to get uniquified email)
     if (behavior.id.includes('sign-up') || behavior.id.includes('signup')) {
-      for (const step of processedSteps) {
-        if (step.type === 'act') {
-          credentialTracker.captureFromStep(step.instruction);
-        }
-      }
+      processedSteps
+        .filter(s => s.type === 'act')
+        .forEach(s => credentialTracker.captureFromStep(s.instruction));
     }
 
     // Handle failure

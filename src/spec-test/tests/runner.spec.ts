@@ -151,103 +151,6 @@ describe('SpecTestRunner', () => {
     });
   });
 
-  // --- runStep: redundant navigation fallback ---
-
-  describe('runStep — redundant navigation fallback', () => {
-    it('should treat failed nav act as no-op when URL contains target', async () => {
-      const mockPage = {
-        url: vi.fn().mockReturnValue('http://localhost:8080/contacts'),
-        evaluate: vi.fn().mockResolvedValue([]),
-      };
-      const mockStagehand = {
-        act: vi.fn().mockRejectedValue(new Error('Could not find element')),
-        context: { activePage: vi.fn().mockReturnValue(mockPage) },
-        observe: vi.fn().mockResolvedValue([]),
-      };
-      const mockTester = {
-        clearSnapshots: vi.fn(),
-        snapshot: vi.fn().mockResolvedValue({ success: true }),
-      };
-
-      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
-      (runner as any).stagehand = mockStagehand;
-      (runner as any).tester = mockTester;
-      (runner as any).preActUrl = null;
-
-      const step: SpecStep = { type: 'act', instruction: 'Click the Contacts button in the navigation' };
-      const context: StepContext = {
-        stepIndex: 0, totalSteps: 1, previousResults: [],
-        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
-      };
-
-      const result = await runner.runStep(step, context);
-
-      expect(result.success).toBe(true);
-    });
-
-    it('should still fail when URL does NOT match target', async () => {
-      const mockPage = {
-        url: vi.fn().mockReturnValue('http://localhost:8080/dashboard'),
-        evaluate: vi.fn().mockResolvedValue([]),
-      };
-      const mockStagehand = {
-        act: vi.fn().mockRejectedValue(new Error('Could not find element')),
-        context: { activePage: vi.fn().mockReturnValue(mockPage) },
-        observe: vi.fn().mockResolvedValue([]),
-      };
-      const mockTester = {
-        clearSnapshots: vi.fn(),
-        snapshot: vi.fn().mockResolvedValue({ success: true }),
-      };
-
-      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
-      (runner as any).stagehand = mockStagehand;
-      (runner as any).tester = mockTester;
-      (runner as any).preActUrl = null;
-
-      const step: SpecStep = { type: 'act', instruction: 'Click the Contacts button in the navigation' };
-      const context: StepContext = {
-        stepIndex: 0, totalSteps: 1, previousResults: [],
-        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
-      };
-
-      const result = await runner.runStep(step, context);
-
-      expect(result.success).toBe(false);
-    });
-
-    it('should not trigger fallback for non-navigation act steps', async () => {
-      const mockPage = {
-        url: vi.fn().mockReturnValue('http://localhost:8080/contacts'),
-        evaluate: vi.fn().mockResolvedValue([]),
-      };
-      const mockStagehand = {
-        act: vi.fn().mockRejectedValue(new Error('Could not find element')),
-        context: { activePage: vi.fn().mockReturnValue(mockPage) },
-        observe: vi.fn().mockResolvedValue([]),
-      };
-      const mockTester = {
-        clearSnapshots: vi.fn(),
-        snapshot: vi.fn().mockResolvedValue({ success: true }),
-      };
-
-      const runner = new SpecTestRunner({ baseUrl: 'http://localhost:8080' });
-      (runner as any).stagehand = mockStagehand;
-      (runner as any).tester = mockTester;
-      (runner as any).preActUrl = null;
-
-      const step: SpecStep = { type: 'act', instruction: 'Click the Submit button' };
-      const context: StepContext = {
-        stepIndex: 0, totalSteps: 1, previousResults: [],
-        page: mockPage as any, stagehand: mockStagehand as any, tester: mockTester as any,
-      };
-
-      const result = await runner.runStep(step, context);
-
-      expect(result.success).toBe(false);
-    });
-  });
-
   // --- runStep: modal dismissal recovery ---
 
   describe('runStep — modal dismissal recovery', () => {
@@ -428,8 +331,6 @@ describe('SpecTestRunner', () => {
       expect(result.success).toBe(true);
       // act called once — no save stabilization
       expect(mockStagehand.act).toHaveBeenCalledTimes(1);
-      // waitForLoadState NOT called — not a save action
-      expect(mockPage.waitForLoadState).not.toHaveBeenCalled();
     });
 
     it('should handle networkidle timeout gracefully', async () => {
@@ -997,9 +898,12 @@ describe('SpecTestRunner', () => {
       expect(mockPage.goto).not.toHaveBeenCalled();
     });
 
-    it('should skip nested parameterized routes like /users/:userId/orders/:orderId', async () => {
+    it('should resolve nested parameterized routes to parent path /users/orders', async () => {
       const mockPage = {
-        url: vi.fn().mockReturnValue('http://localhost:8080/users/5/orders/99'),
+        url: vi.fn()
+          .mockReturnValueOnce('http://localhost:8080/users/5/orders/99')
+          .mockReturnValueOnce('http://localhost:8080/users/5/orders/99')
+          .mockReturnValue('http://localhost:8080/users/orders'),
         goto: vi.fn().mockResolvedValue(undefined),
         evaluate: vi.fn().mockResolvedValue(undefined),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -1018,13 +922,16 @@ describe('SpecTestRunner', () => {
 
       await runner.runExample({ name: 'Test', steps: [] }, { clearSession: false, navigateToPath: '/users/:userId/orders/:orderId' });
 
-      expect(mockPage.goto).not.toHaveBeenCalled();
-      expect(mockPage.evaluate).not.toHaveBeenCalled();
+      // Should have soft-navigated to the resolved parent path
+      expect(mockPage.evaluate).toHaveBeenCalled();
     });
 
-    it('should skip navigation when already in a child path of target (preserves dependency chain context)', async () => {
+    it('should navigate to target path even when currently in a child path', async () => {
       const mockPage = {
-        url: vi.fn().mockReturnValue('http://localhost:8080/projects/123/issues'),
+        url: vi.fn()
+          .mockReturnValueOnce('http://localhost:8080/projects/123/issues')
+          .mockReturnValueOnce('http://localhost:8080/projects/123/issues')
+          .mockReturnValue('http://localhost:8080/projects'),
         goto: vi.fn().mockResolvedValue(undefined),
         evaluate: vi.fn().mockResolvedValue(undefined),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -1041,12 +948,11 @@ describe('SpecTestRunner', () => {
       (runner as any).stagehand = mockStagehand;
       (runner as any).tester = mockTester;
 
-      // On /projects/123/issues, navigating to /projects should be skipped
+      // On /projects/123/issues, navigating to /projects should proceed
       await runner.runExample({ name: 'Test', steps: [] }, { clearSession: false, navigateToPath: '/projects' });
 
-      // Should NOT have navigated (no evaluate call for soft navigation)
-      expect(mockPage.evaluate).not.toHaveBeenCalled();
-      expect(mockPage.goto).not.toHaveBeenCalled();
+      // Should have soft-navigated to /projects
+      expect(mockPage.evaluate).toHaveBeenCalled();
     });
 
     it('should NOT skip navigation when on a different path that merely starts with same prefix', async () => {
@@ -1354,14 +1260,25 @@ describe('SpecTestRunner', () => {
     });
 
     it('should use triple-click+delete fallback when fields resist programmatic clearing', async () => {
+      const mockLocator = {
+        first: vi.fn().mockReturnValue({
+          click: vi.fn().mockResolvedValue(undefined),
+        }),
+      };
       const mockPage = {
         url: vi.fn().mockReturnValue('http://localhost:8080'),
         goto: vi.fn().mockResolvedValue(undefined),
-        // First evaluate: React-compatible clear, second: fields still have values (true)
-        evaluate: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValue(true),
+        // First evaluate: React-compatible clear
+        // Second evaluate: fields still have values (true)
+        // Third evaluate: returns field selectors for triple-click fallback
+        evaluate: vi.fn()
+          .mockResolvedValueOnce(undefined)
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(['#email', '#password']),
         reload: vi.fn().mockResolvedValue(undefined),
         waitForLoadState: vi.fn().mockResolvedValue(undefined),
         keyboard: { press: vi.fn().mockResolvedValue(undefined) },
+        locator: vi.fn().mockReturnValue(mockLocator),
       };
       const mockTester = {
         snapshot: vi.fn().mockResolvedValue({ success: true }),
@@ -1379,8 +1296,8 @@ describe('SpecTestRunner', () => {
       await runner.runExample({ name: 'Test', steps: [] }, { clearSession: false, reloadPage: true });
 
       expect(mockPage.reload).toHaveBeenCalled();
-      // act called for triple-click fallback on email and password fields
-      expect(mockStagehand.act).toHaveBeenCalledWith(expect.stringContaining('Triple-click'));
+      // Generic Playwright-based triple-click fallback (no stagehand.act)
+      expect(mockPage.locator).toHaveBeenCalled();
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('Delete');
     });
 

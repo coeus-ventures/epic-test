@@ -14,7 +14,6 @@ import {
   isModalTriggerAction,
   isModalDismissAction,
   extractSelectAction,
-  extractNavigationTarget,
   isNavigationAction,
   isRefreshAction,
   extractExpectedText,
@@ -358,20 +357,6 @@ describe("help-desk-app — v4 instruction detection helpers", () => {
       s => s.instruction.includes("Submit")
     )!;
     expect(isSaveAction(submitStep.instruction)).toBe(true);
-  });
-
-  it("should detect navigation targets in help-desk-app steps", async () => {
-    const behaviors = await loadBehaviors();
-
-    // Filter by Status: Click the "Tickets" button in the navigation
-    const filterStatus = behaviors.get("filter-tickets-by-status")!;
-    const navStep = filterStatus.examples[0].steps.find(
-      s => s.instruction.includes("navigation")
-    )!;
-    expect(navStep).toBeDefined();
-    const target = extractNavigationTarget(navStep.instruction);
-    expect(target).not.toBeNull();
-    expect(target).toContain("tickets");
   });
 
   it("should detect navigate-to actions in Sign Up / Sign In", async () => {

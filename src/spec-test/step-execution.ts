@@ -67,14 +67,15 @@ export async function executeCheckStep(
 async function executeDeterministicCheck(instruction: string, page: Page): Promise<CheckResult> {
   const trimmed = instruction.trim();
 
-  for (const handler of DETERMINISTIC_HANDLERS) {
-    const match = trimmed.match(handler.pattern);
-    if (match) {
-      const expected = match[1].trim();
-      const actual = await handler.getActual(page);
-      const passed = handler.compare(actual, expected);
-      return { passed, checkType: "deterministic", expected, actual };
-    }
+  const found = DETERMINISTIC_HANDLERS
+    .map(h => ({ handler: h, match: trimmed.match(h.pattern) }))
+    .find(({ match }) => match !== null);
+
+  if (found) {
+    const expected = found.match![1].trim();
+    const actual = await found.handler.getActual(page);
+    const passed = found.handler.compare(actual, expected);
+    return { passed, checkType: "deterministic", expected, actual };
   }
 
   return {
@@ -148,11 +149,11 @@ async function extractInteractiveElements(page: Page): Promise<FailureContext["a
       else if (el.className && typeof el.className === "string") selector += `.${el.className.split(" ")[0]}`;
       else if (el.getAttribute("name")) selector += `[name='${el.getAttribute("name")}']`;
 
-      const attributes: Record<string, string> = {};
-      for (const attr of ["type", "name", "placeholder", "href", "value"]) {
-        const value = el.getAttribute(attr);
-        if (value) attributes[attr] = value;
-      }
+      const attributes = Object.fromEntries(
+        ["type", "name", "placeholder", "href", "value"]
+          .map(attr => [attr, el.getAttribute(attr)] as const)
+          .filter((entry): entry is [string, string] => entry[1] != null)
+      );
 
       return {
         type,
@@ -310,34 +311,10 @@ export function isNavigationAction(instruction: string): string | null {
     /^visit\s+(.+)$/i,
   ];
 
-  for (const pattern of patterns) {
-    const match = instruction.match(pattern);
-    if (match && match[1].trim().startsWith('/')) {
-      return match[1].trim();
-    }
-  }
-  return null;
-}
-
-/**
- * Detect if a failed act step is a UI navigation action that may be redundant.
- * Returns the target page name (lowercased) if the instruction looks like "Click X in the navigation/sidebar/menu",
- * or null if it doesn't match the pattern.
- */
-export function extractNavigationTarget(instruction: string): string | null {
-  // Pattern: "Click [the] X [button/link/tab/item] in [the] navigation/sidebar/menu/nav bar"
-  const navMatch = instruction.match(
-    /click\s+(?:the\s+)?["']?([^"']+?)["']?\s+(?:button\s+|link\s+|tab\s+|item\s+)?in\s+(?:the\s+)?(?:navigation|sidebar|menu|nav\s*bar|left\s*panel|header)/i
-  );
-  if (navMatch) return navMatch[1].trim().toLowerCase();
-
-  // Pattern: "Navigate/Go to [the] X page"
-  const pageMatch = instruction.match(
-    /(?:navigate|go)\s+to\s+(?:the\s+)?(\w+)\s+(?:page|section|tab|view)/i
-  );
-  if (pageMatch) return pageMatch[1].trim().toLowerCase();
-
-  return null;
+  const navMatch = patterns
+    .map(p => instruction.match(p))
+    .find(m => m && m[1].trim().startsWith('/'));
+  return navMatch ? navMatch[1].trim() : null;
 }
 
 /** Check if instruction is a page refresh action. */
@@ -409,15 +386,17 @@ export function extractExpectedText(instruction: string): { text: string; should
     /["']([^"']+)["']\s+(?:is\s+)?(?:no\s+longer\s+)?(?:visible|shown|displayed)/i,
   ];
 
-  for (const pattern of patterns) {
-    const match = instruction.match(pattern);
-    if (match) {
-      const shouldExist = !instruction.toLowerCase().includes('no longer') &&
-                          !instruction.toLowerCase().includes('not ') &&
-                          !instruction.toLowerCase().includes("doesn't") &&
-                          !instruction.toLowerCase().includes("does not");
-      return { text: match[1], shouldExist };
-    }
+  const match = patterns
+    .map(p => instruction.match(p))
+    .find(m => m !== null);
+
+  if (match) {
+    const lower = instruction.toLowerCase();
+    const shouldExist = !lower.includes('no longer') &&
+                        !lower.includes('not ') &&
+                        !lower.includes("doesn't") &&
+                        !lower.includes("does not");
+    return { text: match[1], shouldExist };
   }
   return null;
 }
