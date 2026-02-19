@@ -83,6 +83,7 @@ export class AgentTestRunner implements BehaviorRunner {
     this.stagehand = new Stagehand({
       env: isLocal ? "LOCAL" : "BROWSERBASE",
       apiKey: this.config.browserbaseApiKey,
+      cacheDir: this.config.cacheDir,
       disablePino: true,
       localBrowserLaunchOptions: localBrowserOptions,
       ...this.config.stagehandOptions,
