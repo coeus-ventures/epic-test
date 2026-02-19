@@ -10,8 +10,7 @@
  *   2. Run verifier:   bun run src/agent-test/tests/verify-customer-feedback.ts
  */
 
-import { AgentTestRunner, DEFAULT_MAX_STEPS } from "../index";
-import { verifyAllBehaviors } from "../../spec-test";
+import { AgentTestRunner, DEFAULT_MAX_STEPS, verifyAllBehaviorsContinuous } from "../index";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -29,34 +28,36 @@ const INSTRUCTION_PATH = path.join(
   "instruction.md"
 );
 const BASE_URL = "http://localhost:3000";
-const BEHAVIOR_TIMEOUT_MS = 180_000; // 3 minutes per behavior (agent needs more time)
+const BEHAVIOR_TIMEOUT_MS = 300_000; // 5 minutes per behavior (agent needs more time for dependency chains)
 
 async function main() {
   console.log("=".repeat(60));
-  console.log("Customer Feedback App — Agent Verification Runner");
+  console.log("Customer Feedback App — Continuous Agent Verification");
   console.log("=".repeat(60));
   console.log(`Base URL:    ${BASE_URL}`);
   console.log(`Instruction: ${INSTRUCTION_PATH}`);
   console.log(`Timeout:     ${BEHAVIOR_TIMEOUT_MS / 1000}s per behavior`);
-  console.log(`Agent Mode:  cua`);
+  console.log(`Agent Mode:  dom (continuous flow)`);
   console.log(`Max Steps:   ${DEFAULT_MAX_STEPS}\n`);
 
   const runner = new AgentTestRunner({
     baseUrl: BASE_URL,
     headless: true,
-    agentMode: "cua",
+    agentMode: "dom",
+    agentModel: "openai/gpt-4o",
     maxSteps: DEFAULT_MAX_STEPS,
+    stagehandOptions: { model: "openai/gpt-4o" },
   });
 
   try {
-    const summary = await verifyAllBehaviors(
+    const summary = await verifyAllBehaviorsContinuous(
       INSTRUCTION_PATH,
       runner,
       BEHAVIOR_TIMEOUT_MS
     );
 
     console.log("\n" + "=".repeat(60));
-    console.log("Verification Results (Agent Mode)");
+    console.log("Verification Results (Continuous Agent Mode)");
     console.log("=".repeat(60));
 
     summary.behaviors.forEach((behavior) => {
