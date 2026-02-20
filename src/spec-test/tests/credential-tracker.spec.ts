@@ -9,19 +9,22 @@ describe('CredentialTracker', () => {
 
     // Chain 1
     const email1 = tracker.uniquifyEmail('user@test.com');
-    expect(email1).toBe('user_1@test.com');
+    expect(email1).toMatch(/^user_\d+@test\.com$/);
 
     // Reset between chains (clears credentials, keeps counter)
     tracker.reset();
 
-    // Chain 2
+    // Chain 2 — must be different from chain 1
     const email2 = tracker.uniquifyEmail('user@test.com');
-    expect(email2).toBe('user_2@test.com');
+    expect(email2).toMatch(/^user_\d+@test\.com$/);
+    expect(email2).not.toBe(email1);
 
-    // Chain 3
+    // Chain 3 — must be different from both
     tracker.reset();
     const email3 = tracker.uniquifyEmail('user@test.com');
-    expect(email3).toBe('user_3@test.com');
+    expect(email3).toMatch(/^user_\d+@test\.com$/);
+    expect(email3).not.toBe(email1);
+    expect(email3).not.toBe(email2);
   });
 
   it('reset clears credentials but preserves counter', () => {
@@ -37,7 +40,18 @@ describe('CredentialTracker', () => {
 
     // Counter preserved — next uniquify continues from where it left off
     const email = tracker.uniquifyEmail('user@test.com');
-    expect(email).toBe('user_1@test.com');
+    expect(email).toMatch(/^user_\d+@test\.com$/);
+  });
+
+  it('produces different emails across separate tracker instances', () => {
+    const tracker1 = new CredentialTracker();
+    const tracker2 = new CredentialTracker();
+
+    const email1 = tracker1.uniquifyEmail('user@test.com');
+    const email2 = tracker2.uniquifyEmail('user@test.com');
+
+    // Random seed makes collision extremely unlikely
+    expect(email1).not.toBe(email2);
   });
 
   it('captures and injects credentials correctly', () => {
@@ -74,8 +88,8 @@ describe('processStepsWithCredentials', () => {
 
     const result = processStepsWithCredentials(behavior, steps, tracker);
 
-    // Email should be uniquified
-    expect(result[1].instruction).toBe('Type "user_1@test.com" into the email input field');
+    // Email should be uniquified with a numeric suffix
+    expect(result[1].instruction).toMatch(/Type "user_\d+@test\.com" into the email input field/);
     // Password and other steps unchanged
     expect(result[2].instruction).toBe('Type "password123" into the password input field');
     expect(result[0].instruction).toBe('Navigate to http://localhost:3000');
@@ -95,24 +109,29 @@ describe('processStepsWithCredentials', () => {
 
     // Chain 1
     const chain1 = processStepsWithCredentials(behavior, steps, tracker);
-    expect(chain1[0].instruction).toContain('user_1@test.com');
+    const email1 = chain1[0].instruction;
 
     // Chain 2 (reset credentials, counter persists)
     tracker.reset();
     const chain2 = processStepsWithCredentials(behavior, steps, tracker);
-    expect(chain2[0].instruction).toContain('user_2@test.com');
+    const email2 = chain2[0].instruction;
 
     // Chain 3
     tracker.reset();
     const chain3 = processStepsWithCredentials(behavior, steps, tracker);
-    expect(chain3[0].instruction).toContain('user_3@test.com');
+    const email3 = chain3[0].instruction;
+
+    // All must be different
+    expect(email1).not.toBe(email2);
+    expect(email2).not.toBe(email3);
+    expect(email1).not.toBe(email3);
   });
 
   it('injects captured credentials into non-signup behaviors', () => {
     const tracker = new CredentialTracker();
 
     // Simulate Sign Up capturing credentials
-    tracker.captureFromStep('Type "user_1@test.com" into the email input field');
+    tracker.captureFromStep('Type "user_123456@test.com" into the email input field');
     tracker.captureFromStep('Type "password123" into the password input field');
 
     const signIn: HarborBehavior = {
@@ -131,7 +150,7 @@ describe('processStepsWithCredentials', () => {
     const result = processStepsWithCredentials(signIn, steps, tracker);
 
     // Credentials should be injected from tracker
-    expect(result[1].instruction).toBe('Type "user_1@test.com" into the email input field');
+    expect(result[1].instruction).toBe('Type "user_123456@test.com" into the email input field');
     expect(result[2].instruction).toBe('Type "password123" into the password input field');
   });
 
@@ -139,7 +158,7 @@ describe('processStepsWithCredentials', () => {
     const tracker = new CredentialTracker();
 
     // Simulate Sign Up capturing credentials
-    tracker.captureFromStep('Type "user_1@test.com" into the email input field');
+    tracker.captureFromStep('Type "user_123456@test.com" into the email input field');
     tracker.captureFromStep('Type "password123" into the password input field');
 
     const invalidSignIn: HarborBehavior = {

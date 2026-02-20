@@ -412,11 +412,11 @@ describe("help-desk-app — credential tracking", () => {
     const tracker = new CredentialTracker();
     const processed = processStepsWithCredentials(signUp, steps, tracker);
 
-    // Email should be uniquified with counter suffix
+    // Email should be uniquified with a numeric suffix
     const emailStep = processed.find(s => s.instruction.includes("email input"));
     expect(emailStep).toBeDefined();
-    expect(emailStep!.instruction).toContain("_1@");
-    expect(emailStep!.instruction).not.toContain("newagent@company.com");
+    expect(emailStep!.instruction).toMatch(/newagent_\d+@company\.com/);
+    expect(emailStep!.instruction).not.toContain('"newagent@company.com"');
   });
 
   it("should inject credentials into Sign In steps", async () => {

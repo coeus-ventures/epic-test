@@ -10,7 +10,8 @@ export class CredentialTracker {
 
   constructor() {
     this.credentials = { email: null, password: null };
-    this.executionCounter = 0;
+    // Random offset so re-runs on the same database produce unique emails
+    this.executionCounter = Math.floor(Math.random() * 900000) + 100000;
   }
 
   /** Generate unique email variant to avoid duplicate registration. */
