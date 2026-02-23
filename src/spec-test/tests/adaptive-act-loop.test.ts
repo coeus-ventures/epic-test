@@ -11,8 +11,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SpecTestRunner } from "../index";
 import * as actEvaluator from "../act-evaluator";
+import * as actHelpers from "../act-helpers";
 
 vi.mock("../act-evaluator");
+vi.mock("../act-helpers");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -189,5 +191,40 @@ describe("executeAdaptiveAct", () => {
     // 2 iterations × 1 clearSnapshots + 2 snapshots each
     expect(mockTester.clearSnapshots).toHaveBeenCalledTimes(2);
     expect(mockTester.snapshot).toHaveBeenCalledTimes(4); // before + after × 2
+  });
+
+  it("uses native input fill fallback when stagehand.act fails on a date input", async () => {
+    const { runner, mockTester } = makeRunner();
+    const nativeFillFn = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(actHelpers.tryNativeInputFill).mockResolvedValue(nativeFillFn);
+    vi.mocked(actEvaluator.evaluateActResult)
+      .mockResolvedValueOnce({ status: "failed", reason: "Shadow DOM — nothing changed" })
+      .mockResolvedValueOnce({ status: "complete", reason: "Date filled successfully" });
+
+    await (runner as any).executeAdaptiveAct("Select a start date from the date picker");
+
+    expect(actHelpers.tryNativeInputFill).toHaveBeenCalledTimes(1);
+    expect(nativeFillFn).toHaveBeenCalledTimes(1);
+    // Extra clearSnapshots + 2 snapshots for the native fill re-evaluation
+    expect(mockTester.clearSnapshots).toHaveBeenCalledTimes(2);
+    expect(mockTester.snapshot).toHaveBeenCalledTimes(4);
+    expect(actEvaluator.evaluateActResult).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws immediately when stagehand.act fails and no native inputs are found", async () => {
+    const { runner } = makeRunner();
+    vi.mocked(actHelpers.tryNativeInputFill).mockResolvedValue(null);
+    vi.mocked(actEvaluator.evaluateActResult).mockResolvedValue({
+      status: "failed",
+      reason: "Nothing happened",
+    });
+
+    await expect(
+      (runner as any).executeAdaptiveAct("Click the invisible button"),
+    ).rejects.toThrow("Act step failed");
+
+    expect(actHelpers.tryNativeInputFill).toHaveBeenCalledTimes(1);
+    // No retry — throws after first failed + null fallback
+    expect(actEvaluator.evaluateActResult).toHaveBeenCalledTimes(1);
   });
 });

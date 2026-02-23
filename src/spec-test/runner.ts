@@ -29,7 +29,7 @@ import {
   generateFailureContext,
 } from "./step-execution";
 import { detectPort, resetSession, navigateToPagePath, clearFormFields, safeWaitForLoadState } from "./session-management";
-import { executePageAction } from "./act-helpers";
+import { executePageAction, tryNativeInputFill } from "./act-helpers";
 import { tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
 
 /**
@@ -435,6 +435,24 @@ export class SpecTestRunner {
 
       if (result.status === "complete") return;
       if (result.status === "failed") {
+        // Native input fallback: handles input[type="date/time/datetime-local"] where
+        // stagehand.act() generates an invalid xpath into the shadow DOM.
+        const nativeFill = await tryNativeInputFill(page, stagehand, enrichedInstruction);
+        if (nativeFill) {
+          tester.clearSnapshots();
+          await tester.snapshot(page);
+          await nativeFill();
+          await tester.snapshot(page);
+          actContext.lastAct = `filled native input for: ${enrichedInstruction}`;
+          const reEval = await evaluateActResult(tester, stagehand, actContext);
+          if (reEval.status === "complete") return;
+          if (reEval.status === "incomplete") {
+            actContext.history.push({ act: actContext.lastAct, outcome: reEval.reason });
+            actContext.nextContext = reEval.nextContext;
+            continue;
+          }
+          // reEval also "failed" — fall through to throw
+        }
         throw new Error(`Act step failed: ${result.reason}`);
       }
 
