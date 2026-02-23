@@ -1,0 +1,126 @@
+{
+  "name": "Customer Feedback App",
+  "description": "A feedback and NPS (Net Promoter Score) application for collecting, analyzing, and acting on customer feedback through surveys.",
+  "behaviors": [
+    {
+      "id": "sign-up",
+      "title": "Sign Up",
+      "specFile": "behaviors/sign-up.md",
+      "priority": 1,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:22:52 (136s)"
+    },
+    {
+      "id": "sign-in",
+      "title": "Sign In",
+      "specFile": "behaviors/sign-in.md",
+      "priority": 2,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:23:43 (49s)"
+    },
+    {
+      "id": "invalid-sign-in",
+      "title": "Invalid Sign In",
+      "specFile": "behaviors/invalid-sign-in.md",
+      "priority": 3,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:24:32 (47s)"
+    },
+    {
+      "id": "sign-out",
+      "title": "Sign Out",
+      "specFile": "behaviors/sign-out.md",
+      "priority": 4,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:25:22 (47s)"
+    },
+    {
+      "id": "create-survey",
+      "title": "Create Survey",
+      "specFile": "behaviors/create-survey.md",
+      "priority": 5,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:26:22 (58s)"
+    },
+    {
+      "id": "add-nps-question",
+      "title": "Add NPS Question",
+      "specFile": "behaviors/add-nps-question.md",
+      "priority": 6,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:27:56 (92s)"
+    },
+    {
+      "id": "add-text-question",
+      "title": "Add Text Question",
+      "specFile": "behaviors/add-text-question.md",
+      "priority": 7,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:28:50 (51s)"
+    },
+    {
+      "id": "add-multiple-choice-question",
+      "title": "Add Multiple Choice Question",
+      "specFile": "behaviors/add-multiple-choice-question.md",
+      "priority": 8,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:29:52 (59s)"
+    },
+    {
+      "id": "submit-survey-response",
+      "title": "Submit Survey Response",
+      "specFile": "behaviors/submit-survey-response.md",
+      "priority": 9,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:31:20 (86s)"
+    },
+    {
+      "id": "view-response-summary",
+      "title": "View Response Summary",
+      "specFile": "behaviors/view-response-summary.md",
+      "priority": 10,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:33:50 (147s)"
+    },
+    {
+      "id": "calculate-nps-score",
+      "title": "Calculate NPS Score",
+      "specFile": "behaviors/calculate-nps-score.md",
+      "priority": 11,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:35:18 (86s)"
+    },
+    {
+      "id": "delete-survey",
+      "title": "Delete Survey",
+      "specFile": "behaviors/delete-survey.md",
+      "priority": 12,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:36:22 (61s)"
+    },
+    {
+      "id": "archive-survey",
+      "title": "Archive Survey",
+      "specFile": "behaviors/archive-survey.md",
+      "priority": 13,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:39:55 (211s)"
+    },
+    {
+      "id": "filter-responses-by-date",
+      "title": "Filter Responses by Date",
+      "specFile": "behaviors/filter-responses-by-date.md",
+      "priority": 14,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:41:00 (63s)"
+    },
+    {
+      "id": "export-responses",
+      "title": "Export Responses",
+      "specFile": "behaviors/export-responses.md",
+      "priority": 15,
+      "passes": true,
+      "notes": "done at 2026-02-11T14:42:12 (69s)"
+    }
+  ]
+}
