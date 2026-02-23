@@ -322,62 +322,6 @@ export function isRefreshAction(instruction: string): boolean {
   return /refresh\s+(?:the\s+)?page|reload\s+(?:the\s+)?page|^refresh$|^reload$/i.test(instruction);
 }
 
-/**
- * Detect if an act instruction is a save/submit action (clicking a save-like button).
- * Used to trigger post-save wait logic (wait for form dismissal before proceeding).
- */
-export function isSaveAction(instruction: string): boolean {
-  if (!/click|press|tap|hit/i.test(instruction)) return false;
-  return /\b(save|submit|publish)\b/i.test(instruction);
-}
-
-/**
- * Detect if an act instruction targets a select/dropdown element.
- * Returns the target value to select, or null if not a select action.
- */
-export function extractSelectAction(instruction: string): { value: string } | null {
-  // "Select 'X' from [the] Y [dropdown/menu/select]"
-  const selectFromMatch = instruction.match(
-    /(?:select|choose)\s+["']([^"']+)["']\s+(?:from|in)\s+/i
-  );
-  if (selectFromMatch) return { value: selectFromMatch[1] };
-
-  // "Change/Set Y to 'X'"
-  const changeToMatch = instruction.match(
-    /(?:change|set)\s+.+?\s+to\s+["']([^"']+)["']/i
-  );
-  if (changeToMatch) return { value: changeToMatch[1] };
-
-  // "Select 'X'" (without "from", shorter pattern)
-  const selectOnlyMatch = instruction.match(
-    /(?:select|choose)\s+["']([^"']+)["'](?:\s|$)/i
-  );
-  if (selectOnlyMatch) return { value: selectOnlyMatch[1] };
-
-  return null;
-}
-
-/**
- * Detect if an act instruction is a modal-triggering action (edit, delete, etc.).
- * After these actions, a modal/dialog may appear that needs time to render.
- * Used to trigger a non-fatal waitFor("modal appeared") after the act.
- */
-export function isModalTriggerAction(instruction: string): boolean {
-  if (!/click|press|tap/i.test(instruction)) return false;
-  return /\b(edit|delete|remove|archive|reject|close|pin|unpin)\b/i.test(instruction);
-}
-
-/**
- * Detect if an act instruction dismisses a modal (confirm, cancel, close, dismiss).
- * After these actions, the modal should close and background content becomes accessible.
- * Used to trigger waitFor("modal dismissed") + snapshot reset after the act.
- */
-export function isModalDismissAction(instruction: string): boolean {
-  if (!/click|press|tap/i.test(instruction)) return false;
-  return /\b(confirm|cancel|dismiss)\b/i.test(instruction) ||
-         /\b(save|submit)\b.*\b(modal|dialog|popup|form)\b/i.test(instruction);
-}
-
 /** Extract quoted text from check instruction for direct verification. */
 export function extractExpectedText(instruction: string): { text: string; shouldExist: boolean } | null {
   const patterns = [

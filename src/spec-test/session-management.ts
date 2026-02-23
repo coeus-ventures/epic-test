@@ -5,6 +5,20 @@
 import type { Page } from "playwright";
 import type { Stagehand } from "@browserbasehq/stagehand";
 
+/**
+ * Wait for networkidle with a short timeout, swallowing timeouts silently.
+ * Apps with persistent connections (HMR, WebSocket, SSE, polling) never reach
+ * networkidle — a bare waitForLoadState call would crash the entire run.
+ * Page content is already loaded when this happens, so it is safe to continue.
+ */
+export async function safeWaitForLoadState(page: Page, timeout = 5000): Promise<void> {
+  try {
+    await page.waitForLoadState('networkidle', { timeout });
+  } catch {
+    // Timeout is expected for apps with persistent connections — continue.
+  }
+}
+
 /** Compare URLs ignoring trailing slashes. */
 export function urlsMatch(a: string, b: string): boolean {
   return a.replace(/\/$/, '') === b.replace(/\/$/, '');
@@ -81,7 +95,7 @@ export async function resetSession(page: Page, baseUrl: string): Promise<void> {
 
   // 4. Reload so the SPA re-initializes reading the now-empty storage.
   await page.reload();
-  await page.waitForLoadState('networkidle');
+  await safeWaitForLoadState(page);
   console.log(`[resetSession] Hard reset complete. Page URL: ${page.url()}`);
 }
 
@@ -96,13 +110,13 @@ export async function recoverAuth(
     await stagehand.act(`Type "${credentials.email}" into the email field`);
     await stagehand.act(`Type "${credentials.password}" into the password field`);
     await stagehand.act('Click the sign in button');
-    await page.waitForLoadState('networkidle');
+    await safeWaitForLoadState(page);
 
     // Navigate to the original target after re-auth
     const afterAuth = page.url();
     if (!urlsMatch(afterAuth, targetUrl)) {
       await page.evaluate((url: string) => { window.location.href = url; }, targetUrl);
-      await page.waitForLoadState('networkidle');
+      await safeWaitForLoadState(page);
     }
     console.log(`[navigateToPagePath] Auth recovery succeeded. Page URL: ${page.url()}`);
   } catch (error) {
@@ -146,7 +160,7 @@ export async function navigateToPagePath(
   // Soft navigation (avoids full reload, preserves SPA state)
   console.log(`[navigateToPagePath] Soft-navigating to ${targetUrl}`);
   await page.evaluate((url: string) => { window.location.href = url; }, targetUrl);
-  await page.waitForLoadState('networkidle');
+  await safeWaitForLoadState(page);
 
   // Auth recovery — detect redirect to sign-in page
   const afterUrl = page.url();
