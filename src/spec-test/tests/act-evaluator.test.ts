@@ -69,11 +69,15 @@ describe("evaluateActResult", () => {
     expect(result.status).toBe("complete");
   });
 
-  it("returns incomplete when a modal appeared after the act", async () => {
-    const tester = makeMockTester("Confirmation dialog appeared");
+  it("returns incomplete when LLM detects blocking state and diff shows no change", async () => {
+    // "incomplete" is only reachable via the LLM path (diff shows no page change).
+    // A modal/dialog appearing ALWAYS causes a DOM change → fast path → "complete".
+    // This test covers the rare case: LLM sees a UI blocker (e.g., z-index overlay)
+    // that isn't reflected in the HTML diff.
+    const tester = makeMockTester("No changes detected");
     const stagehand = makeMockStagehand({
       status: "incomplete",
-      reason: "A confirmation dialog is now blocking completion",
+      reason: "A confirmation dialog is blocking the action",
       nextContext: "A modal with Confirm and Cancel buttons is visible",
     });
 
@@ -83,8 +87,8 @@ describe("evaluateActResult", () => {
     expect(result.nextContext).toContain("modal");
   });
 
-  it("returns incomplete when form is still open after submit attempt", async () => {
-    const tester = makeMockTester("Form still visible, no redirect");
+  it("returns incomplete when LLM detects validation error with no DOM change", async () => {
+    const tester = makeMockTester("No changes detected");
     const stagehand = makeMockStagehand({
       status: "incomplete",
       reason: "The form is still open — submission may have failed due to validation",
@@ -114,7 +118,8 @@ describe("evaluateActResult", () => {
   });
 
   it("passes history to the LLM so previous attempts inform the judgment", async () => {
-    const tester = makeMockTester("Modal still visible");
+    // Must use "No changes" diff to trigger the LLM path (otherwise fast path returns "complete")
+    const tester = makeMockTester("No changes detected");
     const stagehand = makeMockStagehand({ status: "incomplete", reason: "Still in modal" });
 
     const ctx = makeCtx({
@@ -134,8 +139,9 @@ describe("evaluateActResult", () => {
   });
 
   it("includes the lastAct in the LLM prompt for accurate judgment", async () => {
-    const tester = makeMockTester("Changes detected");
-    const stagehand = makeMockStagehand({ status: "complete", reason: "Done" });
+    // Must use "No changes" diff to trigger the LLM path
+    const tester = makeMockTester("No changes detected");
+    const stagehand = makeMockStagehand({ status: "failed", reason: "Nothing happened" });
 
     const ctx = makeCtx({ lastAct: "clicked #resolve-dropdown-option-resolved" });
     await evaluateActResult(tester as any, stagehand as any, ctx);
@@ -146,13 +152,15 @@ describe("evaluateActResult", () => {
   });
 
   it("includes the diff summary in the LLM prompt", async () => {
-    const tester = makeMockTester("Agent Smith now appears in assignee field");
-    const stagehand = makeMockStagehand({ status: "complete", reason: "Done" });
+    // Use a "no changes" variant that matches the fast-path regex but is distinct enough
+    // to verify the exact summary string is forwarded into the LLM prompt.
+    const tester = makeMockTester("No changes: element did not respond to the click");
+    const stagehand = makeMockStagehand({ status: "failed", reason: "Nothing happened" });
 
     await evaluateActResult(tester as any, stagehand as any, makeCtx());
 
     const callArg = stagehand.extract.mock.calls[0][0];
     const instruction = typeof callArg === "string" ? callArg : callArg?.instruction ?? "";
-    expect(instruction).toContain("Agent Smith now appears in assignee field");
+    expect(instruction).toContain("No changes: element did not respond to the click");
   });
 });

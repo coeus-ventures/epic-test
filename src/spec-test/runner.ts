@@ -403,11 +403,19 @@ export class SpecTestRunner {
     for (let iteration = 0; iteration < MAX_ADAPTIVE_ITERATIONS; iteration++) {
       actContext.iteration = iteration;
 
-      // PRE-ACT: observe to enrich vague spec instruction into a concrete UI action
-      const observeQuery = actContext.nextContext ?? goal;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const candidates = await (stagehand as any).observe({ instruction: observeQuery }) as Array<{ description: string }>;
-      const enrichedInstruction = candidates[0]?.description ?? goal;
+      // Iteration 0: use the original spec instruction directly — it's already precise
+      // and observe() would strip the payload (e.g. "New Agent") from a type/fill goal.
+      // Subsequent iterations: use observe() to locate the next concrete UI step when
+      // handling intermediate states (modals, multi-step flows).
+      let enrichedInstruction: string;
+      if (iteration === 0) {
+        enrichedInstruction = goal;
+      } else {
+        const observeQuery = actContext.nextContext ?? goal;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const candidates = await (stagehand as any).observe({ instruction: observeQuery }) as Array<{ description: string }>;
+        enrichedInstruction = candidates[0]?.description ?? goal;
+      }
 
       // SNAPSHOT: before (fresh baseline for evaluator diff)
       tester.clearSnapshots();
@@ -419,6 +427,9 @@ export class SpecTestRunner {
       // SNAPSHOT: after (evaluator uses before→after diff)
       await tester.snapshot(page);
 
+      // Set lastAct before evaluate so the LLM knows what action was just taken
+      actContext.lastAct = enrichedInstruction;
+
       // POST-ACT EVALUATE: three-way judgment
       const result = await evaluateActResult(tester, stagehand, actContext);
 
@@ -429,7 +440,6 @@ export class SpecTestRunner {
 
       // incomplete: update context and loop to handle intermediate state
       actContext.history.push({ act: enrichedInstruction, outcome: result.reason });
-      actContext.lastAct = enrichedInstruction;
       actContext.nextContext = result.nextContext;
     }
 

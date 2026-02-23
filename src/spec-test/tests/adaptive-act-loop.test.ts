@@ -49,7 +49,7 @@ describe("executeAdaptiveAct", () => {
     vi.clearAllMocks();
   });
 
-  it("completes in one iteration when observe finds element and evaluator returns complete", async () => {
+  it("completes in one iteration without calling observe (iteration 0 uses original goal)", async () => {
     const { runner, mockStagehand } = makeRunner();
     vi.mocked(actEvaluator.evaluateActResult).mockResolvedValue({
       status: "complete",
@@ -58,26 +58,32 @@ describe("executeAdaptiveAct", () => {
 
     await (runner as any).executeAdaptiveAct("Delete the product");
 
-    expect(mockStagehand.observe).toHaveBeenCalledTimes(1);
-    expect(mockStagehand.act).toHaveBeenCalledTimes(1);
+    // observe() is skipped on iteration 0 — the spec instruction is already precise
+    expect(mockStagehand.observe).not.toHaveBeenCalled();
+    expect(mockStagehand.act).toHaveBeenCalledWith("Delete the product");
     expect(actEvaluator.evaluateActResult).toHaveBeenCalledTimes(1);
   });
 
-  it("uses observe candidate description to enrich the act instruction", async () => {
+  it("uses observe candidate description to enrich intermediate iterations", async () => {
     const { runner, mockStagehand } = makeRunner();
     mockStagehand.observe.mockResolvedValue([
-      { description: "Trash icon next to Product A", selector: "#delete-product-42" },
+      { description: "Confirm button in the delete modal", selector: "#confirm-btn" },
     ]);
-    vi.mocked(actEvaluator.evaluateActResult).mockResolvedValue({
-      status: "complete",
-      reason: "Done",
-    });
+    vi.mocked(actEvaluator.evaluateActResult)
+      .mockResolvedValueOnce({
+        status: "incomplete",
+        reason: "Confirmation modal appeared",
+        nextContext: "A modal with Confirm/Cancel buttons is visible",
+      })
+      .mockResolvedValueOnce({ status: "complete", reason: "Done" });
 
     await (runner as any).executeAdaptiveAct("Delete the product");
 
-    // act() should be called with the enriched description, not the original vague instruction
-    expect(mockStagehand.act).toHaveBeenCalledWith(
-      expect.stringContaining("Trash icon"),
+    // observe() is called on iteration 1 with nextContext, not iteration 0
+    expect(mockStagehand.observe).toHaveBeenCalledTimes(1);
+    // Second act() uses the enriched description from observe
+    expect(mockStagehand.act).toHaveBeenLastCalledWith(
+      expect.stringContaining("Confirm button"),
     );
   });
 
@@ -109,11 +115,12 @@ describe("executeAdaptiveAct", () => {
 
     await (runner as any).executeAdaptiveAct("Delete the product");
 
-    expect(mockStagehand.observe).toHaveBeenCalledTimes(2);
+    // Iteration 0: no observe. Iteration 1: observe with nextContext.
+    expect(mockStagehand.observe).toHaveBeenCalledTimes(1);
     expect(mockStagehand.act).toHaveBeenCalledTimes(2);
 
-    // Second observe must use nextContext to find the confirmation button
-    expect(mockStagehand.observe).toHaveBeenNthCalledWith(2,
+    // The single observe call must use nextContext to find the confirmation button
+    expect(mockStagehand.observe).toHaveBeenCalledWith(
       expect.objectContaining({
         instruction: expect.stringContaining("Confirm/Cancel"),
       }),

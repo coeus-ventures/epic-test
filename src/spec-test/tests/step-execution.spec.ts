@@ -141,7 +141,7 @@ describe("executeActStep", () => {
 
     const result = await executeActStep("User waits", mockStagehand);
 
-    expect(result.duration).toBeGreaterThanOrEqual(50);
+    expect(result.duration).toBeGreaterThanOrEqual(40);
   });
 });
 

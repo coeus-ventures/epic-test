@@ -33,16 +33,29 @@ Last action taken: "${lastAct ?? "none yet"}"
 Page changes detected: "${diffSummary}"
 ${historyText}
 
-Determine whether the goal has been achieved:
-- "complete": goal fully achieved — no further action needed.
-- "incomplete": an intermediate state was reached (modal appeared, form is open,
-  redirected to a page where more actions are needed). Describe what to do next in nextContext.
-- "failed": the action had no meaningful effect. The goal was not progressed.
+IMPORTANT: Your job is ONLY to verify that the specified UI action was performed.
+Whether the business outcome is correct (login succeeded, ticket was saved, etc.)
+is verified by separate check steps — NOT here.
 
-IMPORTANT: "complete" can occur even when the UI flow differs from what the goal implied.
-Focus on whether the GOAL was achieved, not whether a specific UI sequence occurred.
-If the item is gone from the page, the deletion is complete — regardless of whether a
-confirmation dialog appeared.`;
+- "complete": the specified action was performed. Use this when ANY of the following:
+    • A button/link was clicked and ANY change occurred (navigation, form opened, error shown,
+      panel appeared, element disappeared) — the click worked, outcome is irrelevant here
+    • A form field now contains the typed value
+    • A dropdown/select interaction was performed — IMPORTANT: <select> value changes do NOT
+      appear in the HTML diff. If the goal was to pick/select/choose an option and the
+      dropdown/select element is present on the page, return "complete". The next Check step
+      will verify whether the correct value was actually selected.
+    • The diff shows any DOM change consistent with the action
+- "incomplete": you could NOT perform the action because a BLOCKING intermediate UI state
+    appeared that prevents the target from being reached (e.g. a required confirmation dialog
+    appeared BEFORE the action could complete and needs to be resolved first).
+    NOTE: a form or panel appearing AFTER a button click is NOT a blocker — that means the
+    click succeeded ("complete"). Only use "incomplete" if the target was genuinely unreachable.
+- "failed": the action had ZERO effect — page looks identical to before, element completely
+    unchanged. ONLY use this when you are CERTAIN nothing happened at all.
+
+IMPORTANT DEFAULT: When uncertain between "complete" and "failed", ALWAYS choose "complete".
+The next Check step is responsible for verifying outcomes — do not second-guess it here.`;
 }
 
 /**
@@ -66,6 +79,18 @@ export async function evaluateActResult(
     // No snapshots available yet — use default summary
   }
 
+  // Fast path: if the page changed at all, the action succeeded.
+  // Do NOT call stagehand.extract() here — it reads the post-action page,
+  // which is misleading after navigation (the LLM sees the NEW page and
+  // can't find evidence of the action that happened on the OLD page).
+  const noChange = /no changes/i.test(diffSummary);
+  if (!noChange) {
+    return { status: "complete", reason: `Action performed — page changed: ${diffSummary}` };
+  }
+
+  // Only when diff confirms zero change: ask the LLM whether the action had
+  // a subtle effect or truly failed. The page is still in the same state so
+  // stagehand.extract() can safely observe it.
   const prompt = buildEvalPrompt(actContext, diffSummary);
   const result = await stagehand.extract(prompt, EVAL_SCHEMA);
 
