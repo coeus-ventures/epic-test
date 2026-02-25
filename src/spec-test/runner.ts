@@ -18,34 +18,19 @@ import type {
   StepResult,
   StepContext,
   FailureContext,
+  ActContext,
 } from "./types";
+import { evaluateActResult } from "./act-evaluator";
 
 import { parseSpecFile } from "./parsing";
 import {
   isNavigationAction,
   isRefreshAction,
-  isSaveAction,
-  isModalTriggerAction,
-  isModalDismissAction,
-  extractSelectAction,
   generateFailureContext,
 } from "./step-execution";
-import { fillEmptyRequiredFields } from "./form-filler";
-import { detectPort, resetSession, navigateToPagePath, clearFormFields } from "./session-management";
-import {
-  delay,
-  executePageAction,
-  executeSelectAction,
-  executeActWithRetry,
-  waitForFormDismissal,
-  waitForModalAppearance,
-  waitForModalDismissal,
-} from "./act-helpers";
+import { detectPort, resetSession, navigateToPagePath, clearFormFields, safeWaitForLoadState } from "./session-management";
+import { executePageAction, tryNativeInputFill } from "./act-helpers";
 import { tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
-import { dismissLeftoverModal, shouldAutoConfirmModal, autoConfirmModal } from "./modal-handler";
-
-/** Time to wait for SPA route transitions to settle (React Router, Vue Router, etc.) */
-const SPA_NAVIGATION_SETTLE_MS = 2000;
 
 /**
  * Main class for parsing and executing behavior specifications against a running application.
@@ -63,11 +48,16 @@ const SPA_NAVIGATION_SETTLE_MS = 2000;
  *   behavior's page path. localStorage persists across navigations.
  * - `clearSession: false` + no path → keep page as-is. For auth flow continuation.
  */
+/** Maximum iterations for the adaptive act loop before giving up */
+const MAX_ADAPTIVE_ITERATIONS = 5;
+
 export class SpecTestRunner {
   private config: SpecTestConfig;
   private stagehand: Stagehand | null = null;
   private tester: Tester | null = null;
   private currentSpec: TestableSpec | null = null;
+  /** Active page — set by runExample so executeAdaptiveAct can access it */
+  private page: Page | null = null;
   /** URL captured before the most recent Act step, used to detect page transitions */
   private preActUrl: string | null = null;
   /** Whether port auto-detection has already run (only runs once per session) */
@@ -246,6 +236,7 @@ export class SpecTestRunner {
       }
 
       const page = stagehandPage as unknown as Page;
+      this.page = page;
       const shouldClearSession = options?.clearSession !== false;
 
       console.log(`[runExample] clearSession=${shouldClearSession}, navigateToPath=${options?.navigateToPath ?? '(none)'}, currentUrl=${page.url()}`);
@@ -265,7 +256,7 @@ export class SpecTestRunner {
       if (options?.reloadPage) {
         console.log(`[runExample] Reloading page to clean form state`);
         await page.reload();
-        await page.waitForLoadState('networkidle');
+        await safeWaitForLoadState(page);
         await clearFormFields(page);
       }
 
@@ -321,13 +312,6 @@ export class SpecTestRunner {
     if (step.type === "act") {
       this.preActUrl = page.url();
 
-      // Dismiss leftover modals from previous steps before taking baseline
-      await dismissLeftoverModal(page);
-
-      // Fresh "before" baseline for upcoming Check steps
-      tester.clearSnapshots();
-      await tester.snapshot(page);
-
       // Direct navigation (more reliable than Stagehand for URLs)
       const navUrl = isNavigationAction(step.instruction);
       if (navUrl) {
@@ -339,51 +323,26 @@ export class SpecTestRunner {
         return executePageAction(step, page, stepStart, () => page.reload().then(() => {}));
       }
 
-      // Observe-first select dispatch — skip the 3x retry loop for native <select>
-      if (extractSelectAction(step.instruction)) {
-        const selectResult = await executeSelectAction(step.instruction, stagehand, page);
-        if (selectResult) {
-          return { step, success: selectResult.success, duration: Date.now() - stepStart, actResult: selectResult };
-        }
+      // Adaptive loop: observe → enrich instruction → act → evaluate
+      try {
+        await this.executeAdaptiveAct(step.instruction);
+        const actResult = { success: true, duration: Date.now() - stepStart, pageUrl: page.url() };
+        return { step, success: true, duration: Date.now() - stepStart, actResult };
+      } catch (error) {
+        const actResult = {
+          success: false,
+          duration: Date.now() - stepStart,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        return { step, success: false, duration: Date.now() - stepStart, actResult };
       }
-
-      // Before save/submit, auto-fill any empty required fields to prevent
-      // HTML5 validation from blocking form submission when spec steps are incomplete
-      if (isSaveAction(step.instruction)) {
-        await fillEmptyRequiredFields(page);
-      }
-
-      // Stagehand AI action with retry logic
-      const actResult = await executeActWithRetry(step.instruction, stagehand, page);
-
-      // Post-action stabilization: only for click/press/tap actions that might
-      // trigger SPA navigation (React Router, Vue Router). Type/fill/select never navigate.
-      if (actResult.success && /\b(click|press|tap)\b/i.test(step.instruction)
-          && !isSaveAction(step.instruction) && !isModalDismissAction(step.instruction) && !isModalTriggerAction(step.instruction)) {
-        await delay(SPA_NAVIGATION_SETTLE_MS);
-        const postActUrl = page.url();
-        if (this.preActUrl && postActUrl !== this.preActUrl) {
-          console.log(`[runStep] SPA navigation detected: ${this.preActUrl} → ${postActUrl}`);
-          tester.clearSnapshots();
-          await tester.snapshot(page);
-        }
-      }
-
-      // Post-action stabilization — wait for form/modal lifecycle events
-      if (actResult.success) {
-        await this.handlePostActStabilization(step, tester, page, stagehand, context.nextStep);
-      }
-
-      return { step, success: actResult.success, duration: Date.now() - stepStart, actResult };
     }
 
     // === CHECK STEP ===
 
-    // Dismiss any leftover modal before checking page state
-    await dismissLeftoverModal(page);
-
     // Try deterministic text verification first (fast path)
-    const deterministicResult = await tryDeterministicCheck(page, step, stepStart);
+    const { stepResult: deterministicResult, failed: deterministicFailed } =
+      await tryDeterministicCheck(page, step, stepStart);
     if (deterministicResult) return deterministicResult;
 
     // Detect page transition for oracle selection strategy
@@ -392,7 +351,7 @@ export class SpecTestRunner {
 
     const checkType = step.checkType ?? "semantic";
     const checkResult = await executeCheckWithRetry(
-      step.instruction, checkType, page, tester, stagehand, pageTransitioned
+      step.instruction, checkType, page, tester, stagehand, pageTransitioned, deterministicFailed
     );
 
     return { step, success: checkResult.passed, duration: Date.now() - stepStart, checkResult };
@@ -421,27 +380,90 @@ export class SpecTestRunner {
     };
   }
 
-  /** Post-action stabilization — wait for form/modal lifecycle events after a successful Act. */
-  private async handlePostActStabilization(
-    step: SpecStep, tester: Tester, page: Page, stagehand: Stagehand, nextStep?: SpecStep
-  ): Promise<void> {
-    if (isSaveAction(step.instruction)) {
-      await waitForFormDismissal(page);
+  /**
+   * Adaptive act loop: observe → enrich instruction → act → evaluate.
+   * Repeats until the step's goal is confirmed complete (or throws on failure/timeout).
+   *
+   * Uses stagehand.observe() to find the best matching element for the vague spec
+   * instruction, enriches it with the concrete UI description, then evaluates whether
+   * the goal was achieved via b-test diff + LLM judgment.
+   */
+  private async executeAdaptiveAct(goal: string): Promise<void> {
+    const tester = this.tester!;
+    const stagehand = this.stagehand!;
+    const page = this.page!;
+
+    const actContext: ActContext = {
+      goal,
+      lastAct: null,
+      iteration: 0,
+      history: [],
+    };
+
+    for (let iteration = 0; iteration < MAX_ADAPTIVE_ITERATIONS; iteration++) {
+      actContext.iteration = iteration;
+
+      // Iteration 0: use the original spec instruction directly — it's already precise
+      // and observe() would strip the payload (e.g. "New Agent") from a type/fill goal.
+      // Subsequent iterations: use observe() to locate the next concrete UI step when
+      // handling intermediate states (modals, multi-step flows).
+      let enrichedInstruction: string;
+      if (iteration === 0) {
+        enrichedInstruction = goal;
+      } else {
+        const observeQuery = actContext.nextContext ?? goal;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const candidates = await (stagehand as any).observe({ instruction: observeQuery }) as Array<{ description: string }>;
+        enrichedInstruction = candidates[0]?.description ?? goal;
+      }
+
+      // SNAPSHOT: before (fresh baseline for evaluator diff)
       tester.clearSnapshots();
       await tester.snapshot(page);
-    } else if (isModalDismissAction(step.instruction)) {
-      await waitForModalDismissal(tester, page);
-    } else if (isModalTriggerAction(step.instruction)) {
-      await waitForModalAppearance(tester, page);
-      if (shouldAutoConfirmModal(step, nextStep)) {
-        const confirmed = await autoConfirmModal(page, stagehand);
-        if (confirmed) {
-          console.log(`[runStep] Auto-confirmed modal for: "${step.instruction.slice(0, 60)}..."`);
+
+      // ACT
+      await stagehand.act(enrichedInstruction);
+
+      // SNAPSHOT: after (evaluator uses before→after diff)
+      await tester.snapshot(page);
+
+      // Set lastAct before evaluate so the LLM knows what action was just taken
+      actContext.lastAct = enrichedInstruction;
+
+      // POST-ACT EVALUATE: three-way judgment
+      const result = await evaluateActResult(tester, stagehand, actContext);
+
+      if (result.status === "complete") return;
+      if (result.status === "failed") {
+        // Native input fallback: handles input[type="date/time/datetime-local"] where
+        // stagehand.act() generates an invalid xpath into the shadow DOM.
+        const nativeFill = await tryNativeInputFill(page, stagehand, enrichedInstruction);
+        if (nativeFill) {
           tester.clearSnapshots();
           await tester.snapshot(page);
+          await nativeFill();
+          await tester.snapshot(page);
+          actContext.lastAct = `filled native input for: ${enrichedInstruction}`;
+          const reEval = await evaluateActResult(tester, stagehand, actContext);
+          if (reEval.status === "complete") return;
+          if (reEval.status === "incomplete") {
+            actContext.history.push({ act: actContext.lastAct, outcome: reEval.reason });
+            actContext.nextContext = reEval.nextContext;
+            continue;
+          }
+          // reEval also "failed" — fall through to throw
         }
+        throw new Error(`Act step failed: ${result.reason}`);
       }
+
+      // incomplete: update context and loop to handle intermediate state
+      actContext.history.push({ act: enrichedInstruction, outcome: result.reason });
+      actContext.nextContext = result.nextContext;
     }
+
+    throw new Error(
+      `Act step did not complete after ${MAX_ADAPTIVE_ITERATIONS} iterations: "${goal}"`
+    );
   }
 
   /** Close browser and clean up resources. */

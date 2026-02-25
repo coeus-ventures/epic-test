@@ -140,6 +140,37 @@ export interface VerificationSummary {
 }
 
 /**
+ * Context threaded through each iteration of the adaptive act loop.
+ * Carries goal intent, last concrete action taken, and accumulated history
+ * so the evaluator can make an informed judgment at each step.
+ */
+export interface ActContext {
+  /** Original spec step instruction (the goal) */
+  goal: string;
+  /** Concrete action executed in the last iteration (null on first) */
+  lastAct: string | null;
+  /** Current iteration count (0-based) */
+  iteration: number;
+  /** History of all previous iterations in this loop */
+  history: Array<{ act: string; outcome: string }>;
+  /** Hint from previous evaluator to guide next pre-act observe */
+  nextContext?: string;
+}
+
+/**
+ * Result returned by evaluateActResult() after each act iteration.
+ * Drives the loop decision: continue, stop, or surface an error.
+ */
+export interface ActEvalResult {
+  /** complete = goal achieved; incomplete = intermediate state; failed = no progress */
+  status: "complete" | "incomplete" | "failed";
+  /** Human-readable explanation of the judgment */
+  reason: string;
+  /** For incomplete: what the next observe query should focus on */
+  nextContext?: string;
+}
+
+/**
  * A single step in a specification
  */
 export interface SpecStep {

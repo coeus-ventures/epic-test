@@ -1,0 +1,245 @@
+# Progress Log
+
+Started: 2026-02-11
+
+## Behaviors to implement
+
+- [x] sign-up (Sign Up)
+- [x] sign-in (Sign In)
+- [x] invalid-sign-in (Invalid Sign In)
+- [x] sign-out (Sign Out)
+- [x] create-survey (Create Survey)
+- [x] add-nps-question (Add NPS Question)
+- [x] add-text-question (Add Text Question)
+- [x] add-multiple-choice-question (Add Multiple Choice Question)
+- [x] submit-survey-response (Submit Survey Response)
+- [x] view-response-summary (View Response Summary)
+- [x] calculate-nps-score (Calculate NPS Score)
+- [x] delete-survey (Delete Survey)
+- [x] archive-survey (Archive Survey)
+- [x] filter-responses-by-date (Filter Responses by Date)
+- [x] export-responses (Export Responses)
+
+## Completed iterations
+
+### Iteration 1: Sign Up (2026-02-11)
+- Set up React/Vite project (port 3000)
+- Created AuthContext (src/AuthContext.jsx) with localStorage-based auth (signUp, signIn, signOut)
+- Created routing in App.jsx: /sign-up, /sign-in, /surveys with protected routes
+- Created SignUp page (src/pages/SignUp.jsx): name, email, password fields + Sign Up button → redirects to /surveys
+- Created SignIn page (src/pages/SignIn.jsx): email, password fields + Sign In button
+- Created Surveys page (src/pages/Surveys.jsx): shows "Create Survey" button + Sign Out button
+- Users stored in localStorage under 'users' key; current session under 'user' key
+
+### Iteration 1: Sign Up (sign-up)
+- Status: done
+- Duration: 136s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:22:52
+
+### Iteration 2: Sign In (2026-02-11)
+- Sign In functionality was already implemented during Iteration 1 (Sign Up)
+- SignIn.jsx: has email input, password input, Sign In button
+- AuthContext.jsx: signIn() validates email/password against localStorage users
+- On successful sign in, navigates to /surveys which displays "Create Survey" button
+- No code changes needed — behavior already works as specified
+
+### Iteration 2: Sign In (sign-in)
+- Status: done
+- Duration: 49s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:23:43
+
+### Iteration 3: Invalid Sign In (2026-02-11)
+- The invalid sign-in behavior was mostly already implemented during Iteration 1
+- AuthContext.jsx signIn() throws "Invalid email or password" when credentials don't match
+- SignIn.jsx catches the error and displays it in a <p className="error"> element
+- Added role="alert" to the error message for better accessibility and test detectability
+- Form remains visible after error (no redirect on failed sign-in)
+- Files changed: src/pages/SignIn.jsx (added role="alert" to error paragraph)
+
+### Iteration 3: Invalid Sign In (invalid-sign-in)
+- Status: done
+- Duration: 47s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:24:32
+
+### Iteration 4: Sign Out (2026-02-11)
+- Sign Out functionality was already implemented during Iteration 1 (Sign Up)
+- Surveys.jsx: has "Sign Out" button that calls signOut() and navigates to /sign-in
+- AuthContext.jsx: signOut() sets user to null, useEffect removes 'user' from localStorage
+- ProtectedRoute in App.jsx redirects unauthenticated users to /sign-in
+- SignIn.jsx displays the sign-in form (email, password, Sign In button)
+- No code changes needed — behavior already works as specified
+
+### Iteration 4: Sign Out (sign-out)
+- Status: done
+- Duration: 47s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:25:22
+
+### Iteration 5: Create Survey (2026-02-11)
+- Updated Surveys.jsx to add survey creation form with title and description inputs
+- "Create Survey" button toggles form visibility
+- "Save" button creates survey object and stores in localStorage under 'surveys' key
+- Surveys list renders below form showing title and description for each survey
+- After save, form hides and survey title is visible on the page
+- Files changed: src/pages/Surveys.jsx (added state, form, survey list, localStorage persistence)
+
+### Iteration 5: Create Survey (create-survey)
+- Status: done
+- Duration: 58s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:26:22
+
+### Iteration 6: Add NPS Question (2026-02-11)
+- Created SurveyDetail page (src/pages/SurveyDetail.jsx) at /surveys/:id route
+  - Loads survey from localStorage by ID, displays title and description
+  - "Add Question" button toggles question creation form
+  - Form has question type dropdown (NPS, Text, Multiple Choice) and question text input
+  - "Save" button stores question in localStorage under `questions_{surveyId}` key
+  - Questions list displays saved questions with type badge and text
+- Updated Surveys.jsx: survey titles are now clickable Links navigating to /surveys/:id
+- Updated App.jsx: added /surveys/:id route with ProtectedRoute wrapper, imported SurveyDetail
+- Files changed: src/pages/SurveyDetail.jsx (new), src/pages/Surveys.jsx, src/App.jsx
+### Iteration 6: Add NPS Question (add-nps-question)
+- Status: done
+- Duration: 92s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:27:56
+
+### Iteration 7: Add Text Question (2026-02-11)
+- The add-text-question behavior was already fully implemented during Iteration 6 (Add NPS Question)
+- SurveyDetail.jsx: question type dropdown includes "Text" option
+- SurveyDetail.jsx: question text input field accepts any text including "What could we do better?"
+- SurveyDetail.jsx: Save button persists questions to localStorage and displays them in the questions list
+- The question text is rendered as `<p>{q.text}</p>` making it visible on the page after save
+- No code changes needed — behavior already works as specified
+
+### Iteration 7: Add Text Question (add-text-question)
+- Status: done
+- Duration: 51s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:28:50
+
+### Iteration 8: Add Multiple Choice Question (2026-02-11)
+- Updated SurveyDetail.jsx to support multiple choice questions with option input fields
+- Added `options` state (initialized with 2 empty strings for first/second option fields)
+- When "Multiple Choice" is selected from the question type dropdown, option input fields appear
+- Each option input has aria-label "Option 1", "Option 2", etc. and placeholder "Option 1", "Option 2"
+- "Add Option" button allows adding more option fields dynamically
+- On save, non-empty options are stored with the question object in localStorage
+- Question text is displayed in the questions list after save (visible on page)
+- State (options) properly reset on save and cancel
+- Files changed: src/pages/SurveyDetail.jsx (added options state, option inputs for Multiple Choice, save logic)
+
+### Iteration 8: Add Multiple Choice Question (add-multiple-choice-question)
+- Status: done
+- Duration: 59s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:29:52
+
+### Iteration 9: Submit Survey Response (2026-02-11)
+- Updated SurveyDetail.jsx to add survey response functionality
+- Added state: takingSurvey (boolean), responses (object mapping question id → answer), submitted (boolean)
+- "Take Survey" button appears when questions exist; opens a response form
+- NPS questions: renders 0-10 score buttons with visual selection (blue highlight), each with aria-label "Score N"
+- Text questions: renders textarea for free-text input
+- Multiple Choice questions: renders radio buttons for each option
+- "Submit" button saves response to localStorage under `responses_{surveyId}` key and shows confirmation
+- Confirmation message: "Thank you! Your response has been submitted successfully." with role="alert"
+- "Back to Survey" button resets submitted state to return to normal view
+- Questions list and Take Survey button hidden during survey-taking and after submission
+- Files changed: src/pages/SurveyDetail.jsx (added takingSurvey mode, response form, submission logic, confirmation)
+
+### Iteration 9: Submit Survey Response (submit-survey-response)
+- Status: done
+- Duration: 86s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:31:20
+
+### Iteration 10: View Response Summary (2026-02-11)
+- Added tab navigation (Questions / Results) to SurveyDetail page (src/pages/SurveyDetail.jsx)
+- "Results" tab loads responses from localStorage (`responses_{surveyId}`) and displays total count
+- All question-related content (Add Question form, Questions list, Take Survey, submission) gated behind activeTab === 'questions'
+- Response count refreshes when clicking Results tab and after submitting a new response
+- Created Analytics page (src/pages/Analytics.jsx) at /analytics route with aggregated response summary
+- Added /analytics route to App.jsx with ProtectedRoute wrapper
+- Files changed: src/pages/SurveyDetail.jsx, src/pages/Analytics.jsx (new), src/App.jsx
+### Iteration 10: View Response Summary (view-response-summary)
+- Status: done
+- Duration: 147s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:33:50
+
+### Iteration 11: Calculate NPS Score (2026-02-11)
+- Added "Analytics" tab to SurveyDetail page (src/pages/SurveyDetail.jsx) alongside existing Questions and Results tabs
+- Analytics tab calculates NPS score from stored survey responses for NPS-type questions
+- NPS formula: ((Promoters - Detractors) / Total) * 100, rounded to integer
+- Displays large NPS Score number with color coding (green >= 0, red < 0)
+- Shows breakdown cards: Promoters (9-10), Passives (7-8), Detractors (0-6) with counts and percentages
+- Clicking Analytics tab refreshes responses from localStorage
+- Files changed: src/pages/SurveyDetail.jsx (added Analytics tab button and analytics content panel)
+### Iteration 11: Calculate NPS Score (calculate-nps-score)
+- Status: done
+- Duration: 86s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:35:18
+
+### Iteration 12: Delete Survey (2026-02-11)
+- Added delete functionality to Surveys page (src/pages/Surveys.jsx)
+- Added `deleteTarget` state to track which survey is being deleted
+- Added "Delete" button next to each survey in the list with aria-label for accessibility
+- Added confirmation modal (role="dialog") with "Confirm" and "Cancel" buttons
+- `handleDelete()` filters the survey from state and updates localStorage
+- Modal overlay with semi-transparent background, centered white dialog box
+- Files changed: src/pages/Surveys.jsx (added deleteTarget state, Delete buttons, confirmation modal, handleDelete function)
+### Iteration 12: Delete Survey (delete-survey)
+- Status: done
+- Duration: 61s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:36:22
+
+### Iteration 13: Archive Survey (2026-02-11)
+- Added `handleArchive(id)` function to Surveys.jsx that sets survey status to 'archived' and persists to localStorage
+- Added "Archive" button next to each non-archived survey with aria-label for accessibility
+- Archive button hidden for already-archived surveys
+- When archived, "Archived" text appears next to the survey title as an italic span
+- Buttons (Archive + Delete) wrapped in a flex container for proper layout
+- Files changed: src/pages/Surveys.jsx (added handleArchive, Archive button, Archived label)
+### Iteration 13: Archive Survey (archive-survey)
+- Status: done
+- Duration: 211s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:39:55
+
+### Iteration 14: Filter Responses by Date (2026-02-11)
+- Added date filtering to the Results tab on SurveyDetail page (src/pages/SurveyDetail.jsx)
+- Added startDate and endDate state variables
+- Added "Filter by Date" section with two HTML date inputs (type="date") with labels "Start Date" and "End Date"
+- Responses are filtered by comparing submittedAt date string against selected date range
+- Displays "Showing X of Y responses" count and lists individual filtered responses with their answers
+- Each response shows submitted date and all question answers
+- When no responses match, shows "No responses match the selected date range" message
+- Files changed: src/pages/SurveyDetail.jsx (added date filter state, filter UI, filtered response list)
+
+### Iteration 14: Filter Responses by Date (filter-responses-by-date)
+- Status: done
+- Duration: 63s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:41:00
+
+### Iteration 15: Export Responses (2026-02-11)
+- Added "Export" button to the Results tab on SurveyDetail page (src/pages/SurveyDetail.jsx)
+- Added exportMessage state variable for showing confirmation after export
+- Export button generates CSV file from filtered responses with question text as headers
+- CSV download triggered via Blob URL and programmatic anchor click
+- After export, displays "Responses exported successfully!" confirmation message (role="alert") for 5 seconds
+- Files changed: src/pages/SurveyDetail.jsx (added exportMessage state, handleExport function, Export button with confirmation message)
+
+### Iteration 15: Export Responses (export-responses)
+- Status: done
+- Duration: 69s
+- Exit code: 0
+- Timestamp: 2026-02-11T14:42:12
+

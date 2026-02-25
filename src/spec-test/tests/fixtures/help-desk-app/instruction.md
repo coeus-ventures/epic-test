@@ -436,7 +436,7 @@ Agents can add internal notes visible only to the support team.
 * Act: Click on the ticket "Complex issue"
 * Act: Click the "Add Internal Note" button
 * Act: Type "Escalating to engineering team" into the note input field
-* Act: Click the "Save" button
+* Act: Click the "Save Note" button
 * Check: The text "Escalating to engineering team" is visible on the page
 
 ---

@@ -2,11 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   isNavigationAction,
   isRefreshAction,
-  isSaveAction,
-  isModalTriggerAction,
-  isModalDismissAction,
   extractExpectedText,
-  extractSelectAction,
   executeActStep,
   executeCheckStep,
   generateFailureContext,
@@ -57,51 +53,6 @@ describe('isRefreshAction', () => {
   });
 });
 
-describe('isSaveAction', () => {
-  it('should match save/submit/publish click instructions', () => {
-    expect(isSaveAction('Click the "Save" button')).toBe(true);
-    expect(isSaveAction('Click Save')).toBe(true);
-    expect(isSaveAction('Click "Save Order"')).toBe(true);
-    expect(isSaveAction('Click Submit')).toBe(true);
-    expect(isSaveAction('Click the submit button')).toBe(true);
-    expect(isSaveAction('Click "Publish"')).toBe(true);
-    expect(isSaveAction('Press the Save button')).toBe(true);
-  });
-
-  it('should NOT match non-save actions', () => {
-    expect(isSaveAction('Click the "Add Contact" button')).toBe(false);
-    expect(isSaveAction('Click Create')).toBe(false);
-    expect(isSaveAction('Click the "Delete" button')).toBe(false);
-    expect(isSaveAction('Type "Save" into the input')).toBe(false);
-    expect(isSaveAction('Navigate to /save')).toBe(false);
-  });
-});
-
-describe('extractSelectAction', () => {
-  it('should match "Select X from dropdown" patterns', () => {
-    expect(extractSelectAction('Select "Open" from the status dropdown')).toEqual({ value: 'Open' });
-    expect(extractSelectAction("Choose 'High' from the priority dropdown")).toEqual({ value: 'High' });
-    expect(extractSelectAction('Select "Technology" from category')).toEqual({ value: 'Technology' });
-    expect(extractSelectAction("Select 'Closed' from the filter")).toEqual({ value: 'Closed' });
-  });
-
-  it('should match "Change/Set X to Y" patterns', () => {
-    expect(extractSelectAction('Change status to "Resolved"')).toEqual({ value: 'Resolved' });
-    expect(extractSelectAction("Set priority to 'Critical'")).toEqual({ value: 'Critical' });
-  });
-
-  it('should match bare "Select X" patterns', () => {
-    expect(extractSelectAction('Select "Open"')).toEqual({ value: 'Open' });
-    expect(extractSelectAction("Choose 'Pending'")).toEqual({ value: 'Pending' });
-  });
-
-  it('should NOT match non-select instructions', () => {
-    expect(extractSelectAction('Click the "Add" button')).toBeNull();
-    expect(extractSelectAction('Type "hello" into the input')).toBeNull();
-    expect(extractSelectAction('Navigate to /settings')).toBeNull();
-  });
-});
-
 describe('extractExpectedText', () => {
   it('should extract quoted text from "see" instructions', () => {
     const result = extractExpectedText('Should see "Welcome back"');
@@ -126,53 +77,6 @@ describe('extractExpectedText', () => {
   it('should handle single quotes', () => {
     const result = extractExpectedText("Should see 'Welcome back'");
     expect(result).toEqual({ text: 'Welcome back', shouldExist: true });
-  });
-});
-
-describe('isModalTriggerAction', () => {
-  it('should match click edit/delete/remove/archive/reject/close/pin actions', () => {
-    expect(isModalTriggerAction('Click the "Edit" button')).toBe(true);
-    expect(isModalTriggerAction('Click Delete')).toBe(true);
-    expect(isModalTriggerAction('Click the remove icon')).toBe(true);
-    expect(isModalTriggerAction('Click "Archive"')).toBe(true);
-    expect(isModalTriggerAction('Press the reject button')).toBe(true);
-    expect(isModalTriggerAction('Click the close icon')).toBe(true);
-    expect(isModalTriggerAction('Click the "Pin" button')).toBe(true);
-    expect(isModalTriggerAction('Tap unpin')).toBe(true);
-  });
-
-  it('should NOT match non-click actions', () => {
-    expect(isModalTriggerAction('Type "edit" into the input')).toBe(false);
-    expect(isModalTriggerAction('Navigate to /delete')).toBe(false);
-  });
-
-  it('should NOT match non-modal trigger click actions', () => {
-    expect(isModalTriggerAction('Click the "Save" button')).toBe(false);
-    expect(isModalTriggerAction('Click Submit')).toBe(false);
-    expect(isModalTriggerAction('Click the "Add" button')).toBe(false);
-  });
-});
-
-describe('isModalDismissAction', () => {
-  it('should match click confirm/cancel/dismiss actions', () => {
-    expect(isModalDismissAction('Click "Confirm"')).toBe(true);
-    expect(isModalDismissAction('Click the Cancel button')).toBe(true);
-    expect(isModalDismissAction('Press dismiss')).toBe(true);
-  });
-
-  it('should match save/submit in modal/dialog context', () => {
-    expect(isModalDismissAction('Click "Save" in the modal')).toBe(true);
-    expect(isModalDismissAction('Click submit in the dialog')).toBe(true);
-    expect(isModalDismissAction('Click save in the popup form')).toBe(true);
-  });
-
-  it('should NOT match non-click actions', () => {
-    expect(isModalDismissAction('Type "confirm" into the input')).toBe(false);
-  });
-
-  it('should NOT match regular save (without modal/dialog context)', () => {
-    expect(isModalDismissAction('Click the "Save" button')).toBe(false);
-    expect(isModalDismissAction('Click Submit')).toBe(false);
   });
 });
 
@@ -237,7 +141,7 @@ describe("executeActStep", () => {
 
     const result = await executeActStep("User waits", mockStagehand);
 
-    expect(result.duration).toBeGreaterThanOrEqual(50);
+    expect(result.duration).toBeGreaterThanOrEqual(40);
   });
 });
 

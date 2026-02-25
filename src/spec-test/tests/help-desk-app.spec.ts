@@ -10,10 +10,6 @@ import { fileURLToPath } from "url";
 import {
   parseHarborBehaviorsWithDependencies,
   buildDependencyChain,
-  isSaveAction,
-  isModalTriggerAction,
-  isModalDismissAction,
-  extractSelectAction,
   isNavigationAction,
   isRefreshAction,
   extractExpectedText,
@@ -285,80 +281,7 @@ describe("help-desk-app — check classification", () => {
 // 6. V4 INSTRUCTION DETECTION — helpers match help-desk-app patterns
 // ============================================================================
 
-describe("help-desk-app — v4 instruction detection helpers", () => {
-  it("should detect select actions in help-desk-app steps", async () => {
-    const behaviors = await loadBehaviors();
-
-    // Create Ticket: Select "High" from the priority dropdown
-    const createTicket = behaviors.get("create-ticket")!;
-    const selectStep = createTicket.examples[0].steps.find(
-      s => s.instruction.includes("Select")
-    )!;
-    const result = extractSelectAction(selectStep.instruction);
-    expect(result).not.toBeNull();
-    expect(result!.value).toBe("High");
-
-    // Assign Ticket: Select "Agent Smith" from the assignee dropdown
-    const assignTicket = behaviors.get("assign-ticket-to-agent")!;
-    const assignSelect = assignTicket.examples[0].steps.find(
-      s => s.instruction.includes("Select")
-    )!;
-    const assignResult = extractSelectAction(assignSelect.instruction);
-    expect(assignResult).not.toBeNull();
-    expect(assignResult!.value).toBe("Agent Smith");
-  });
-
-  it("should detect all select actions across behaviors", async () => {
-    const behaviors = await loadBehaviors();
-
-    const selectSteps: { behaviorId: string; instruction: string; value: string }[] = [];
-
-    for (const [id, behavior] of behaviors) {
-      for (const example of behavior.examples) {
-        for (const step of example.steps) {
-          const result = extractSelectAction(step.instruction);
-          if (result) {
-            selectSteps.push({ behaviorId: id, instruction: step.instruction, value: result.value });
-          }
-        }
-      }
-    }
-
-    // Expected select actions:
-    // create-ticket: "High" from priority dropdown
-    // assign-ticket-to-agent: "Agent Smith" from assignee dropdown
-    // change-ticket-status: "In Progress" from status dropdown
-    // filter-tickets-by-status: "Resolved" from status dropdown, "Open" from status filter
-    // filter-tickets-by-priority: "High" from priority dropdown, "Low" from priority dropdown, "High" from priority filter
-    expect(selectSteps.length).toBeGreaterThanOrEqual(7);
-
-    const values = selectSteps.map(s => s.value);
-    expect(values).toContain("High");
-    expect(values).toContain("Agent Smith");
-    expect(values).toContain("In Progress");
-    expect(values).toContain("Resolved");
-    expect(values).toContain("Open");
-    expect(values).toContain("Low");
-  });
-
-  it("should detect save actions in help-desk-app steps", async () => {
-    const behaviors = await loadBehaviors();
-
-    // Assign Ticket: Click the "Save" button → isSaveAction
-    const assignTicket = behaviors.get("assign-ticket-to-agent")!;
-    const saveStep = assignTicket.examples[0].steps.find(
-      s => s.instruction.includes("Save")
-    )!;
-    expect(isSaveAction(saveStep.instruction)).toBe(true);
-
-    // Create Ticket: Click the "Submit" button → isSaveAction
-    const createTicket = behaviors.get("create-ticket")!;
-    const submitStep = createTicket.examples[0].steps.find(
-      s => s.instruction.includes("Submit")
-    )!;
-    expect(isSaveAction(submitStep.instruction)).toBe(true);
-  });
-
+describe("help-desk-app — navigation detection helpers", () => {
   it("should detect navigate-to actions in Sign Up / Sign In", async () => {
     const behaviors = await loadBehaviors();
 
@@ -367,17 +290,6 @@ describe("help-desk-app — v4 instruction detection helpers", () => {
     const url = isNavigationAction(navStep.instruction);
     expect(url).not.toBeNull();
     expect(url).toContain("/sign-up");
-  });
-
-  it("should NOT detect modal triggers/dismiss in help-desk-app steps", async () => {
-    const behaviors = await loadBehaviors();
-
-    // Save buttons are NOT modal dismiss actions (no modal/dialog keyword)
-    const assignTicket = behaviors.get("assign-ticket-to-agent")!;
-    const saveStep = assignTicket.examples[0].steps.find(
-      s => s.instruction.includes("Save")
-    )!;
-    expect(isModalDismissAction(saveStep.instruction)).toBe(false);
   });
 });
 
