@@ -15,7 +15,6 @@ A support ticket management application for tracking customer issues and providi
 
 #### Behaviors
 - Sign In
-- Invalid Sign In
 
 ### Sign Up Page
 **Path:** `/sign-up`
@@ -108,40 +107,18 @@ Support agents can sign in to access the help desk.
 
 #### Rules
 
+##### Invalid Credentials
+- When:
+  - User enters incorrect credentials
+- Then:
+  - Error message is displayed
+
 ##### Valid Credentials
 - When:
   - User enters agent@company.com and demo123
 - Then:
   - User is signed in
   - User sees tickets page
-
-#### Scenarios
-
-##### User signs in successfully
-
-###### Steps
-* Act: Navigate to http://localhost:3000/sign-in
-* Act: Type "agent@company.com" into the email input field
-* Act: Type "demo123" into the password input field
-* Act: Click the "Sign In" button
-* Check: The page displays a button to create a ticket or navigate the application
-
----
-
-### Invalid Sign In
-
-Users see an error when entering wrong credentials.
-
-#### Dependencies
-1. Sign Up: User creates a new account
-
-#### Rules
-
-##### Invalid Credentials
-- When:
-  - User enters incorrect credentials
-- Then:
-  - Error message is displayed
 
 #### Scenarios
 
@@ -154,6 +131,15 @@ Users see an error when entering wrong credentials.
 * Act: Click the "Sign In" button
 * Check: An error message is displayed
 * Check: The sign in form is still visible
+
+##### User signs in successfully
+
+###### Steps
+* Act: Navigate to http://localhost:3000/sign-in
+* Act: Type "agent@company.com" into the email input field
+* Act: Type "demo123" into the password input field
+* Act: Click the "Sign In" button
+* Check: The page displays a button to create a ticket or navigate the application
 
 ---
 

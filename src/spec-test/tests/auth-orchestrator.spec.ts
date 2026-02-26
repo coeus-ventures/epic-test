@@ -12,7 +12,6 @@ describe('isAuthBehavior', () => {
     expect(isAuthBehavior('signin')).toBe(true);
     expect(isAuthBehavior('sign-out')).toBe(true);
     expect(isAuthBehavior('signout')).toBe(true);
-    expect(isAuthBehavior('invalid-sign-in')).toBe(true);
   });
 
   it('should be case-insensitive', () => {
@@ -28,9 +27,10 @@ describe('isAuthBehavior', () => {
     expect(isAuthBehavior('edit-profile')).toBe(false);
   });
 
-  it('should match IDs that contain auth patterns', () => {
-    expect(isAuthBehavior('user-sign-up-flow')).toBe(true);
-    expect(isAuthBehavior('my-signin-page')).toBe(true);
+  it('should not match IDs that contain auth patterns as substrings', () => {
+    expect(isAuthBehavior('user-sign-up-flow')).toBe(false);
+    expect(isAuthBehavior('my-signin-page')).toBe(false);
+    expect(isAuthBehavior('invalid-sign-in')).toBe(false);
   });
 });
 
@@ -91,26 +91,21 @@ describe('runAuthBehaviorsSequence', () => {
     })),
   });
 
-  function makeBehavior(id: string, title: string): HarborBehavior {
-    return {
-      id,
-      title,
-      dependencies: [],
-      examples: [{
-        name: `Execute ${title}`,
-        steps: [
-          { type: 'act', instruction: 'Act: Navigate to http://localhost:3000' },
-          { type: 'act', instruction: 'Act: Click button' },
-        ],
-      }],
-    };
+  function makeBehavior(id: string, title: string, exampleCount = 1): HarborBehavior {
+    const examples = Array.from({ length: exampleCount }, (_, i) => ({
+      name: `Execute ${title} ${i + 1}`,
+      steps: [
+        { type: 'act' as const, instruction: 'Act: Navigate to http://localhost:3000' },
+        { type: 'act' as const, instruction: 'Act: Click button' },
+      ],
+    }));
+    return { id, title, dependencies: [], examples };
   }
 
-  it('should execute auth behaviors in the correct order', async () => {
+  it('should execute auth behaviors in the correct order (Sign Up → Sign Out → Sign In)', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
     behaviors.set('sign-out', makeBehavior('sign-out', 'Sign Out'));
-    behaviors.set('invalid-sign-in', makeBehavior('invalid-sign-in', 'Invalid Sign In'));
     behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In'));
 
     const context = new VerificationContext();
@@ -121,19 +116,51 @@ describe('runAuthBehaviorsSequence', () => {
       behaviors, context, credentialTracker, runner, 60000
     );
 
-    expect(results).toHaveLength(4);
+    expect(results).toHaveLength(3);
     expect(results[0].behaviorId).toBe('sign-up');
     expect(results[1].behaviorId).toBe('sign-out');
-    expect(results[2].behaviorId).toBe('invalid-sign-in');
-    expect(results[3].behaviorId).toBe('sign-in');
+    expect(results[2].behaviorId).toBe('sign-in');
 
     expect(results.every(r => r.status === 'pass')).toBe(true);
 
-    expect(runner.runExample).toHaveBeenCalledTimes(4);
+    // 3 behaviors × 1 example each = 3 calls
+    expect(runner.runExample).toHaveBeenCalledTimes(3);
 
     expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true, reloadPage: false });
     expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: false });
+    // Sign In first example: no reload (inherits state from Sign Out)
     expect(runner.runExample.mock.calls[2][1]).toEqual({ clearSession: false, reloadPage: false });
+  });
+
+  it('should run multiple Sign In scenarios with reload between them', async () => {
+    const behaviors = new Map<string, HarborBehavior>();
+    behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
+    behaviors.set('sign-out', makeBehavior('sign-out', 'Sign Out'));
+    // Sign In with 2 scenarios (wrong credentials + valid credentials)
+    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In', 2));
+
+    const context = new VerificationContext();
+    const credentialTracker = new CredentialTracker();
+    const runner = createMockRunner(true);
+
+    const results = await runAuthBehaviorsSequence(
+      behaviors, context, credentialTracker, runner, 60000
+    );
+
+    expect(results).toHaveLength(3);
+    expect(results[2].behaviorId).toBe('sign-in');
+    expect(results[2].status).toBe('pass');
+
+    // 1 Sign Up + 1 Sign Out + 2 Sign In scenarios = 4 calls
+    expect(runner.runExample).toHaveBeenCalledTimes(4);
+
+    // Sign Up: clearSession, no reload
+    expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true, reloadPage: false });
+    // Sign Out: no clear, no reload
+    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: false });
+    // Sign In scenario 1: no clear, no reload (inherits state from Sign Out)
+    expect(runner.runExample.mock.calls[2][1]).toEqual({ clearSession: false, reloadPage: false });
+    // Sign In scenario 2: no clear, reload (clean form state)
     expect(runner.runExample.mock.calls[3][1]).toEqual({ clearSession: false, reloadPage: true });
   });
 
@@ -245,29 +272,11 @@ describe('runAuthBehaviorsSequence', () => {
     expect(results[0].error).toContain('No examples found');
   });
 
-  it('should always reload page for sign-in (ensures clean form state)', async () => {
-    const behaviors = new Map<string, HarborBehavior>();
-    behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
-    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In'));
-
-    const context = new VerificationContext();
-    const credentialTracker = new CredentialTracker();
-    const runner = createMockRunner(true);
-
-    await runAuthBehaviorsSequence(
-      behaviors, context, credentialTracker, runner, 60000
-    );
-
-    expect(runner.runExample.mock.calls[0][1]).toEqual({ clearSession: true, reloadPage: false });
-    // Sign In always gets reloadPage: true — clears dirty form state from any previous auth step
-    expect(runner.runExample.mock.calls[1][1]).toEqual({ clearSession: false, reloadPage: true });
-  });
-
-  it('should reload for sign-in even when sign-in follows sign-out (no invalid-sign-in)', async () => {
+  it('should reload for sign-in scenarios after the first (ensures clean form state)', async () => {
     const behaviors = new Map<string, HarborBehavior>();
     behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
     behaviors.set('sign-out', makeBehavior('sign-out', 'Sign Out'));
-    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In'));
+    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In', 2));
 
     const context = new VerificationContext();
     const credentialTracker = new CredentialTracker();
@@ -277,8 +286,10 @@ describe('runAuthBehaviorsSequence', () => {
       behaviors, context, credentialTracker, runner, 60000
     );
 
-    // Sign In always reloads — ensures clean form regardless of previous auth behavior
-    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false, reloadPage: true });
+    // Sign In scenario 1: no reload (inherits from Sign Out)
+    expect(runner.runExample.mock.calls[2][1]).toMatchObject({ clearSession: false, reloadPage: false });
+    // Sign In scenario 2: reload (clean form state after wrong credentials scenario)
+    expect(runner.runExample.mock.calls[3][1]).toMatchObject({ clearSession: false, reloadPage: true });
   });
 
   it('should only run auth behaviors found in authOrder', async () => {
@@ -298,5 +309,50 @@ describe('runAuthBehaviorsSequence', () => {
     expect(results).toHaveLength(2);
     expect(results[0].behaviorId).toBe('sign-up');
     expect(results[1].behaviorId).toBe('sign-in');
+  });
+
+  it('should fail Sign In if any scenario fails', async () => {
+    const behaviors = new Map<string, HarborBehavior>();
+    behaviors.set('sign-up', makeBehavior('sign-up', 'Sign Up'));
+    behaviors.set('sign-in', makeBehavior('sign-in', 'Sign In', 2));
+
+    const context = new VerificationContext();
+    const credentialTracker = new CredentialTracker();
+
+    let callCount = 0;
+    const runner = {
+      runExample: vi.fn<BehaviorRunner['runExample']>(async (): Promise<ExampleResult> => {
+        callCount++;
+        // Sign Up succeeds (call 1), Sign In scenario 1 fails (call 2), scenario 2 succeeds (call 3)
+        const shouldFail = callCount === 2;
+        return {
+          example: { name: 'test', steps: [] },
+          success: !shouldFail,
+          steps: [],
+          duration: 100,
+          failedAt: shouldFail ? {
+            stepIndex: 0,
+            step: { type: 'act' as const, instruction: 'test' },
+            context: {
+              pageSnapshot: '',
+              pageUrl: '',
+              failedStep: { type: 'act' as const, instruction: 'test' },
+              error: 'Wrong credentials error',
+              availableElements: [],
+              suggestions: [],
+            },
+          } : undefined,
+        };
+      }),
+    };
+
+    const results = await runAuthBehaviorsSequence(
+      behaviors, context, credentialTracker, runner, 60000
+    );
+
+    expect(results).toHaveLength(2);
+    expect(results[0].status).toBe('pass'); // Sign Up
+    expect(results[1].status).toBe('fail'); // Sign In (first scenario failed)
+    expect(results[1].error).toBe('Wrong credentials error');
   });
 });

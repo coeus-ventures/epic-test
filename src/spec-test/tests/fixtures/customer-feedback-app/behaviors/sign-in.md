@@ -6,9 +6,6 @@ Existing users can sign in to access their surveys.
 
 This behavior is part of the **Sign In Page** at `/sign-in`.
 
-Other behaviors on this page:
-- Invalid Sign In
-
 **Important**: Make sure this page includes UI elements (links, buttons, forms) for ALL behaviors listed above.
 
 ## Dependencies
@@ -21,6 +18,16 @@ Make sure your implementation integrates with these existing features.
 
 ## Examples
 
+### User enters wrong credentials
+
+#### Steps
+* Act: Navigate to http://localhost:3000/sign-in
+* Act: Type "wrong@email.com" into the email input field
+* Act: Type "wrongpassword" into the password input field
+* Act: Click the "Sign In" button
+* Check: An error message is displayed
+* Check: The sign in form is still visible
+
 ### User signs in successfully
 
 #### Steps
@@ -29,4 +36,3 @@ Make sure your implementation integrates with these existing features.
 * Act: Type "demo123" into the password input field
 * Act: Click the "Sign In" button
 * Check: The page displays a button to create a survey or navigate the application
-

@@ -98,7 +98,6 @@ describe("topologicalSort", () => {
     const map = toBehaviorMap([
       makeBehavior("sign-up"),
       makeBehavior("sign-in", ["sign-up"]),
-      makeBehavior("invalid-sign-in", ["sign-up"]),
       makeBehavior("sign-out", ["sign-up"]),
       makeBehavior("create-survey", ["sign-up"]),
       makeBehavior("add-nps-question", ["create-survey"]),
@@ -120,7 +119,7 @@ describe("topologicalSort", () => {
     const sorted = topologicalSort(map);
     const ids = sorted.map((b) => b.id);
 
-    expect(sorted).toHaveLength(15);
+    expect(sorted).toHaveLength(14);
 
     // Every behavior must appear after all its dependencies
     for (const [id, behavior] of map) {
@@ -146,7 +145,6 @@ describe("partitionBehaviors", () => {
     const sorted = [
       makeBehavior("sign-up"),
       makeBehavior("sign-in", ["sign-up"]),
-      makeBehavior("invalid-sign-in", ["sign-up"]),
       makeBehavior("sign-out", ["sign-up"]),
       makeBehavior("create-survey", ["sign-up"]),
       makeBehavior("add-nps-question", ["create-survey"]),
@@ -157,7 +155,6 @@ describe("partitionBehaviors", () => {
     expect(auth.map((b) => b.id)).toEqual([
       "sign-up",
       "sign-out",
-      "invalid-sign-in",
       "sign-in",
     ]);
     expect(nonAuth.map((b) => b.id)).toEqual([
@@ -171,7 +168,6 @@ describe("partitionBehaviors", () => {
       makeBehavior("sign-in", ["sign-up"]),
       makeBehavior("sign-up"),
       makeBehavior("sign-out", ["sign-up"]),
-      makeBehavior("invalid-sign-in", ["sign-up"]),
     ];
 
     const { auth } = partitionBehaviors(sorted);
@@ -179,7 +175,6 @@ describe("partitionBehaviors", () => {
     expect(auth.map((b) => b.id)).toEqual([
       "sign-up",
       "sign-out",
-      "invalid-sign-in",
       "sign-in",
     ]);
   });

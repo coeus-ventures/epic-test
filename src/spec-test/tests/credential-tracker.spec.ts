@@ -154,10 +154,82 @@ describe('processStepsWithCredentials', () => {
     expect(result[2].instruction).toBe('Type "password123" into the password input field');
   });
 
-  it('does not inject credentials into invalid sign-in behaviors', () => {
+  it('does not inject credentials for "wrong credentials" scenario within sign-in', () => {
     const tracker = new CredentialTracker();
 
     // Simulate Sign Up capturing credentials
+    tracker.captureFromStep('Type "user_123456@test.com" into the email input field');
+    tracker.captureFromStep('Type "password123" into the password input field');
+
+    const signIn: HarborBehavior = {
+      id: 'sign-in',
+      title: 'Sign In',
+      dependencies: [{ behaviorId: 'sign-up' }],
+      examples: []
+    };
+    const steps: SpecStep[] = [
+      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'act', instruction: 'Type "wrong@email.com" into the email input field' },
+      { type: 'act', instruction: 'Type "wrongpassword" into the password input field' },
+      { type: 'act', instruction: 'Click the "Sign In" button' },
+    ];
+
+    // Scenario name contains "wrong" — should skip injection
+    const result = processStepsWithCredentials(signIn, steps, tracker, 'User enters wrong credentials');
+
+    // Credentials should NOT be injected — scenario uses intentionally wrong credentials
+    expect(result[1].instruction).toBe('Type "wrong@email.com" into the email input field');
+    expect(result[2].instruction).toBe('Type "wrongpassword" into the password input field');
+  });
+
+  it('injects credentials for "signs in successfully" scenario within sign-in', () => {
+    const tracker = new CredentialTracker();
+
+    // Simulate Sign Up capturing credentials
+    tracker.captureFromStep('Type "user_123456@test.com" into the email input field');
+    tracker.captureFromStep('Type "password123" into the password input field');
+
+    const signIn: HarborBehavior = {
+      id: 'sign-in',
+      title: 'Sign In',
+      dependencies: [{ behaviorId: 'sign-up' }],
+      examples: []
+    };
+    const steps: SpecStep[] = [
+      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'act', instruction: 'Type "agent@company.com" into the email input field' },
+      { type: 'act', instruction: 'Type "demo123" into the password input field' },
+      { type: 'act', instruction: 'Click the "Sign In" button' },
+    ];
+
+    // Valid scenario name — should inject credentials
+    const result = processStepsWithCredentials(signIn, steps, tracker, 'User signs in successfully');
+
+    expect(result[1].instruction).toBe('Type "user_123456@test.com" into the email input field');
+    expect(result[2].instruction).toBe('Type "password123" into the password input field');
+  });
+
+  it('skips injection for scenario names containing "invalid"', () => {
+    const tracker = new CredentialTracker();
+    tracker.captureFromStep('Type "user@test.com" into the email input field');
+    tracker.captureFromStep('Type "pass123" into the password input field');
+
+    const signIn: HarborBehavior = {
+      id: 'sign-in',
+      title: 'Sign In',
+      dependencies: [{ behaviorId: 'sign-up' }],
+      examples: []
+    };
+    const steps: SpecStep[] = [
+      { type: 'act', instruction: 'Type "bad@test.com" into the email input field' },
+    ];
+
+    const result = processStepsWithCredentials(signIn, steps, tracker, 'User enters invalid credentials');
+    expect(result[0].instruction).toBe('Type "bad@test.com" into the email input field');
+  });
+
+  it('still skips injection for legacy invalid-sign-in behavior ID', () => {
+    const tracker = new CredentialTracker();
     tracker.captureFromStep('Type "user_123456@test.com" into the email input field');
     tracker.captureFromStep('Type "password123" into the password input field');
 
@@ -176,7 +248,7 @@ describe('processStepsWithCredentials', () => {
 
     const result = processStepsWithCredentials(invalidSignIn, steps, tracker);
 
-    // Credentials should NOT be injected — behavior uses intentionally wrong credentials
+    // Credentials should NOT be injected — behavior ID fallback
     expect(result[1].instruction).toBe('Type "wrong@email.com" into the email input field');
     expect(result[2].instruction).toBe('Type "wrongpassword" into the password input field');
   });

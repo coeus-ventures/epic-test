@@ -85,14 +85,15 @@ export class CredentialTracker {
  * Process steps for a behavior, handling credential uniquification and injection.
  *
  * - Sign Up behaviors: uniquify email to avoid duplicate registration
- * - Behaviors with "invalid"/"wrong" in ID: skip injection (testing bad credentials)
+ * - Scenarios with "invalid"/"wrong"/"incorrect" in name: skip injection (testing bad credentials)
  * - Other behaviors: inject captured credentials into first 5 steps
  *   (the sign-in preamble area — avoids replacing fields in behavior-specific forms)
  */
 export function processStepsWithCredentials(
   behavior: HarborBehavior,
   steps: SpecStep[],
-  credentialTracker: CredentialTracker
+  credentialTracker: CredentialTracker,
+  scenarioName?: string
 ): SpecStep[] {
   const behaviorId = behavior.id.toLowerCase();
 
@@ -118,8 +119,12 @@ export function processStepsWithCredentials(
     });
   }
 
-  // Skip injection for behaviors testing invalid credentials
-  if (behaviorId.includes('invalid') || behaviorId.includes('wrong')) {
+  // Skip injection for scenarios/behaviors testing invalid credentials.
+  // Check both scenario name (e.g., "User enters wrong credentials" within Sign In)
+  // and behavior ID (e.g., legacy "invalid-sign-in") for backwards compatibility.
+  const scenarioLower = (scenarioName || '').toLowerCase();
+  if (scenarioLower.includes('wrong') || scenarioLower.includes('invalid') || scenarioLower.includes('incorrect')
+      || behaviorId.includes('invalid') || behaviorId.includes('wrong')) {
     return steps;
   }
 

@@ -19,18 +19,10 @@
       "notes": "done at 2026-02-11T14:23:43 (49s)"
     },
     {
-      "id": "invalid-sign-in",
-      "title": "Invalid Sign In",
-      "specFile": "behaviors/invalid-sign-in.md",
-      "priority": 3,
-      "passes": true,
-      "notes": "done at 2026-02-11T14:24:32 (47s)"
-    },
-    {
       "id": "sign-out",
       "title": "Sign Out",
       "specFile": "behaviors/sign-out.md",
-      "priority": 4,
+      "priority": 3,
       "passes": true,
       "notes": "done at 2026-02-11T14:25:22 (47s)"
     },

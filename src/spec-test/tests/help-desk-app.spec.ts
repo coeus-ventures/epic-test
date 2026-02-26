@@ -29,17 +29,17 @@ async function loadBehaviors() {
 }
 
 // ============================================================================
-// 1. PARSING — All 13 behaviors parsed correctly
+// 1. PARSING — All 12 behaviors parsed correctly
 // ============================================================================
 
 describe("help-desk-app — parsing", () => {
-  it("should parse all 13 behaviors from instruction.md", async () => {
+  it("should parse all 12 behaviors from instruction.md", async () => {
     const behaviors = await loadBehaviors();
 
-    expect(behaviors.size).toBe(13);
+    expect(behaviors.size).toBe(12);
 
     const expectedIds = [
-      "sign-up", "sign-in", "invalid-sign-in", "sign-out",
+      "sign-up", "sign-in", "sign-out",
       "create-ticket", "assign-ticket-to-agent", "add-reply-to-ticket",
       "change-ticket-status", "resolve-ticket", "filter-tickets-by-status",
       "filter-tickets-by-priority", "add-internal-note", "search-tickets",
@@ -106,14 +106,25 @@ describe("help-desk-app — parsing", () => {
     expect(selectStep!.instruction).toContain("priority");
   });
 
-  it("should parse Invalid Sign In with two check steps", async () => {
+  it("should parse Sign In with two scenarios (wrong credentials + valid credentials)", async () => {
     const behaviors = await loadBehaviors();
-    const invalid = behaviors.get("invalid-sign-in")!;
-    const checks = invalid.examples[0].steps.filter(s => s.type === "check");
+    const signIn = behaviors.get("sign-in")!;
 
-    expect(checks).toHaveLength(2);
-    expect(checks[0].instruction).toContain("error message");
-    expect(checks[1].instruction).toContain("sign in form");
+    expect(signIn.examples).toHaveLength(2);
+
+    // First scenario: wrong credentials
+    const wrongCreds = signIn.examples[0];
+    expect(wrongCreds.name).toBe("User enters wrong credentials");
+    const wrongChecks = wrongCreds.steps.filter(s => s.type === "check");
+    expect(wrongChecks).toHaveLength(2);
+    expect(wrongChecks[0].instruction).toContain("error message");
+    expect(wrongChecks[1].instruction).toContain("sign in form");
+
+    // Second scenario: valid credentials
+    const validCreds = signIn.examples[1];
+    expect(validCreds.name).toBe("User signs in successfully");
+    const validChecks = validCreds.steps.filter(s => s.type === "check");
+    expect(validChecks).toHaveLength(1);
   });
 });
 
@@ -127,7 +138,6 @@ describe("help-desk-app — page paths", () => {
 
     expect(behaviors.get("sign-up")!.pagePath).toBe("/sign-up");
     expect(behaviors.get("sign-in")!.pagePath).toBe("/sign-in");
-    expect(behaviors.get("invalid-sign-in")!.pagePath).toBe("/sign-in");
   });
 
   it("should map ticket list behaviors to /tickets", async () => {
@@ -331,7 +341,7 @@ describe("help-desk-app — credential tracking", () => {
     expect(emailStep!.instruction).not.toContain('"newagent@company.com"');
   });
 
-  it("should inject credentials into Sign In steps", async () => {
+  it("should inject credentials into Sign In valid scenario steps", async () => {
     const behaviors = await loadBehaviors();
     const signUp = behaviors.get("sign-up")!;
     const signIn = behaviors.get("sign-in")!;
@@ -342,14 +352,38 @@ describe("help-desk-app — credential tracking", () => {
       if (step.type === "act") tracker.captureFromStep(step.instruction);
     }
 
-    // Then process Sign In — should inject captured credentials
+    // Process Sign In valid scenario — should inject captured credentials
+    const validScenario = signIn.examples[1]; // "User signs in successfully"
     const processed = processStepsWithCredentials(
-      signIn, signIn.examples[0].steps, tracker
+      signIn, validScenario.steps, tracker, validScenario.name
     );
 
     const emailStep = processed.find(s => s.instruction.includes("email input"));
     expect(emailStep).toBeDefined();
     // Should have the captured email injected (not the original "agent@company.com")
     expect(emailStep!.instruction).toContain("newagent@company.com");
+  });
+
+  it("should NOT inject credentials into Sign In wrong credentials scenario", async () => {
+    const behaviors = await loadBehaviors();
+    const signUp = behaviors.get("sign-up")!;
+    const signIn = behaviors.get("sign-in")!;
+
+    // First capture from Sign Up
+    const tracker = new CredentialTracker();
+    for (const step of signUp.examples[0].steps) {
+      if (step.type === "act") tracker.captureFromStep(step.instruction);
+    }
+
+    // Process Sign In wrong credentials scenario — should NOT inject
+    const wrongScenario = signIn.examples[0]; // "User enters wrong credentials"
+    const processed = processStepsWithCredentials(
+      signIn, wrongScenario.steps, tracker, wrongScenario.name
+    );
+
+    const emailStep = processed.find(s => s.instruction.includes("email input"));
+    expect(emailStep).toBeDefined();
+    // Should keep the original wrong credentials
+    expect(emailStep!.instruction).toContain("wrong@email.com");
   });
 });

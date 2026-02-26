@@ -60,8 +60,8 @@ export async function verifyBehaviorWithDependencies(
       };
     }
 
-    // Process steps with credential handling
-    const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker);
+    // Process steps with credential handling (pass scenario name for injection skip)
+    const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker, example.name);
 
     const creds = credentialTracker.getCredentials();
 

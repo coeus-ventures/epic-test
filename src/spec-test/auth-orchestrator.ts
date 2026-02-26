@@ -7,11 +7,11 @@ import { VerificationContext } from "./verification-context";
 import { CredentialTracker, processStepsWithCredentials } from "./credential-tracker";
 
 /** Known auth behavior ID patterns */
-const AUTH_PATTERNS = ['sign-up', 'signup', 'sign-in', 'signin', 'sign-out', 'signout', 'invalid-sign-in'];
+const AUTH_PATTERNS = ['sign-up', 'signup', 'sign-in', 'signin', 'sign-out', 'signout'];
 
 export function isAuthBehavior(behaviorId: string): boolean {
   const lower = behaviorId.toLowerCase();
-  return AUTH_PATTERNS.some(p => lower === p || lower.includes(p));
+  return AUTH_PATTERNS.some(p => lower === p);
 }
 
 /** Default timeout per behavior (2 minutes) */
@@ -25,17 +25,19 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: st
 }
 
 /**
- * Run auth behaviors in sequence: Sign Up → Sign Out → Invalid Sign In → Sign In
+ * Run auth behaviors in sequence: Sign Up → Sign Out → Sign In
  *
  * This is a dedicated flow because auth behaviors have unique requirements:
  * - Sign Up creates the account and logs the user in
  * - Sign Out needs the user to already be logged in (no login preamble)
- * - Invalid Sign In needs the user to be logged out
  * - Sign In needs the user to be logged out with valid credentials available
  *
  * The key insight: after Sign Up, the user IS signed in. So Sign Out can
- * execute directly. After Sign Out, the user is signed out, so Invalid Sign In
- * and Sign In can execute directly.
+ * execute directly. After Sign Out, the user is signed out, so Sign In
+ * can execute directly.
+ *
+ * Sign In supports multiple scenarios (e.g., "wrong credentials" then "valid credentials").
+ * Each scenario runs in order; subsequent scenarios reload the page for clean form state.
  *
  * Session management:
  * - Only Sign Up clears browser state (fresh start)
@@ -51,7 +53,7 @@ export async function runAuthBehaviorsSequence(
   const results: BehaviorContext[] = [];
 
   // Auth behaviors in execution order
-  const authOrder = ['sign-up', 'sign-out', 'invalid-sign-in', 'sign-in'];
+  const authOrder = ['sign-up', 'sign-out', 'sign-in'];
 
   const authBehaviors: HarborBehavior[] = [];
   for (const id of authOrder) {
@@ -85,55 +87,69 @@ export async function runAuthBehaviorsSequence(
       }
     }
 
+    if (behavior.examples.length === 0) {
+      const failResult: BehaviorContext = {
+        behaviorId: behavior.id,
+        behaviorName: behavior.title,
+        status: 'fail',
+        error: `No examples found for behavior: ${behavior.title}`,
+        duration: 0,
+      };
+      context.markResult(behavior.id, failResult);
+      results.push(failResult);
+      continue;
+    }
+
     try {
-      const example = behavior.examples[0];
-      if (!example) {
-        const failResult: BehaviorContext = {
-          behaviorId: behavior.id,
-          behaviorName: behavior.title,
-          status: 'fail',
-          error: `No examples found for behavior: ${behavior.title}`,
-          duration: 0,
-        };
-        context.markResult(behavior.id, failResult);
-        results.push(failResult);
-        continue;
-      }
+      let behaviorFailed = false;
+      let firstError: string | undefined;
+      let totalDuration = 0;
 
-      // Process steps with credentials
-      const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker);
+      for (let j = 0; j < behavior.examples.length; j++) {
+        const example = behavior.examples[j];
 
-      const creds = credentialTracker.getCredentials();
-      console.log(`Auth [${behavior.id}]: ${processedSteps.length} steps, clearSession=${isFirst}, email=${creds.email ?? '(none)'}`);
+        // Process steps with credentials (scenario-aware)
+        const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker, example.name);
 
-      const exampleToRun = { ...example, steps: processedSteps };
+        const creds = credentialTracker.getCredentials();
+        const clearSession = isFirst && j === 0;
+        // Reload between Sign In scenarios to clear stale form state.
+        // The first scenario inherits state from the previous auth step.
+        const needsReload = behavior.id === 'sign-in' && j > 0;
 
-      // Always reload before Sign In to ensure clean form state.
-      // After Invalid Sign In, the form may contain stale credentials from the failed attempt.
-      // Some SPAs re-hydrate form state on reload, so runner.ts also clears input fields.
-      const needsReload = behavior.id === 'sign-in';
+        console.log(`Auth [${behavior.id}][${j}/${behavior.examples.length - 1}]: ${processedSteps.length} steps, clearSession=${clearSession}, reloadPage=${needsReload}, email=${creds.email ?? '(none)'}`);
 
-      const exampleResult = await withTimeout(
-        runner.runExample(exampleToRun, { clearSession: isFirst, reloadPage: needsReload }),
-        behaviorTimeoutMs,
-        `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
-      );
+        const exampleToRun = { ...example, steps: processedSteps };
 
-      // Capture credentials after Sign Up
-      if (behavior.id.includes('sign-up') || behavior.id.includes('signup')) {
-        for (const step of processedSteps) {
-          if (step.type === 'act') {
-            credentialTracker.captureFromStep(step.instruction);
+        const exampleResult = await withTimeout(
+          runner.runExample(exampleToRun, { clearSession, reloadPage: needsReload }),
+          behaviorTimeoutMs,
+          `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
+        );
+
+        // Capture credentials after Sign Up
+        if (j === 0 && (behavior.id.includes('sign-up') || behavior.id.includes('signup'))) {
+          for (const step of processedSteps) {
+            if (step.type === 'act') {
+              credentialTracker.captureFromStep(step.instruction);
+            }
           }
+        }
+
+        totalDuration += exampleResult.duration;
+
+        if (!exampleResult.success && !behaviorFailed) {
+          behaviorFailed = true;
+          firstError = exampleResult.failedAt?.context.error;
         }
       }
 
       const result: BehaviorContext = {
         behaviorId: behavior.id,
         behaviorName: behavior.title,
-        status: exampleResult.success ? 'pass' : 'fail',
-        error: exampleResult.failedAt?.context.error,
-        duration: exampleResult.duration,
+        status: behaviorFailed ? 'fail' : 'pass',
+        error: firstError,
+        duration: totalDuration,
       };
 
       context.markResult(behavior.id, result);

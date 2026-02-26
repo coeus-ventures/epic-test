@@ -104,7 +104,6 @@ export function partitionBehaviors(sorted: HarborBehavior[]): {
   const AUTH_ORDER = [
     "sign-up",
     "sign-out",
-    "invalid-sign-in",
     "sign-in",
   ];
 
@@ -228,8 +227,7 @@ async function runAuthFlowContinuous(
     }
 
     try {
-      const example = behavior.examples[0];
-      if (!example) {
+      if (behavior.examples.length === 0) {
         const result: BehaviorContext = {
           behaviorId: behavior.id,
           behaviorName: behavior.title,
@@ -243,47 +241,67 @@ async function runAuthFlowContinuous(
         continue;
       }
 
-      const processedSteps = processStepsWithCredentials(
-        behavior,
-        example.steps,
-        credentialTracker
-      );
+      // Loop through ALL examples for this auth behavior.
+      // Sign In may have multiple scenarios (e.g., wrong credentials then valid credentials).
+      let allExamplesPassed = true;
+      let firstError: string | undefined;
+      let totalDuration = 0;
 
-      const creds = credentialTracker.getCredentials();
-      console.log(
-        `Auth [${behavior.id}]: ${processedSteps.length} steps, clearSession=${isFirst}, email=${creds.email ?? "(none)"}`
-      );
+      for (let j = 0; j < behavior.examples.length; j++) {
+        const example = behavior.examples[j];
 
-      const exampleToRun = { ...example, steps: processedSteps };
-      const needsReload = behavior.id === "sign-in";
+        const processedSteps = processStepsWithCredentials(
+          behavior,
+          example.steps,
+          credentialTracker,
+          example.name
+        );
 
-      const exampleResult = await withTimeout(
-        runner.runExample(exampleToRun, {
-          clearSession: isFirst,
-          reloadPage: needsReload,
-        }),
-        behaviorTimeoutMs,
-        `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
-      );
+        const creds = credentialTracker.getCredentials();
+        const clearSession = isFirst && j === 0;
+        const needsReload = behavior.id === "sign-in" && j > 0;
 
-      // Capture credentials after Sign Up
-      if (
-        behavior.id.includes("sign-up") ||
-        behavior.id.includes("signup")
-      ) {
-        for (const step of processedSteps) {
-          if (step.type === "act") {
-            credentialTracker.captureFromStep(step.instruction);
+        console.log(
+          `Auth [${behavior.id}] example ${j}: ${processedSteps.length} steps, clearSession=${clearSession}, reloadPage=${needsReload}, email=${creds.email ?? "(none)"}`
+        );
+
+        const exampleToRun = { ...example, steps: processedSteps };
+
+        const exampleResult = await withTimeout(
+          runner.runExample(exampleToRun, {
+            clearSession,
+            reloadPage: needsReload,
+          }),
+          behaviorTimeoutMs,
+          `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
+        );
+
+        totalDuration += exampleResult.duration;
+
+        // Capture credentials after Sign Up
+        if (
+          behavior.id.includes("sign-up") ||
+          behavior.id.includes("signup")
+        ) {
+          for (const step of processedSteps) {
+            if (step.type === "act") {
+              credentialTracker.captureFromStep(step.instruction);
+            }
           }
+        }
+
+        if (!exampleResult.success) {
+          allExamplesPassed = false;
+          firstError = firstError ?? exampleResult.failedAt?.context.error;
         }
       }
 
       const result: BehaviorContext = {
         behaviorId: behavior.id,
         behaviorName: behavior.title,
-        status: exampleResult.success ? "pass" : "fail",
-        error: exampleResult.failedAt?.context.error,
-        duration: exampleResult.duration,
+        status: allExamplesPassed ? "pass" : "fail",
+        error: firstError,
+        duration: totalDuration,
       };
 
       context.markResult(behavior.id, result);
@@ -386,7 +404,8 @@ async function runNonAuthBehaviorsContinuous(
       const processedSteps = processStepsWithCredentials(
         behavior,
         example.steps,
-        credentialTracker
+        credentialTracker,
+        example.name
       );
 
       const creds = credentialTracker.getCredentials();
@@ -470,7 +489,7 @@ function findFailedDependency(
  * Instead of re-running dependency chains per behavior, this:
  * 1. Parses the spec and topologically sorts all behaviors
  * 2. Separates auth from non-auth behaviors
- * 3. Runs auth flow first (Sign Up → Sign Out → Invalid Sign In → Sign In)
+ * 3. Runs auth flow first (Sign Up → Sign Out → Sign In)
  * 4. Runs non-auth behaviors in topological order on the same session
  * 5. Cascades skips when a behavior fails (all transitive dependents are skipped)
  *
