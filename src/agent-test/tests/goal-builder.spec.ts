@@ -5,15 +5,15 @@ import type { SpecStep } from "../../spec-test";
 describe("buildGoalPrompt", () => {
   it("should build a goal with numbered actions and success criteria", () => {
     const steps: SpecStep[] = [
-      { type: "act", instruction: 'Click the "Create Survey" button' },
+      { type: "Act", instruction: 'Click the "Create Survey" button' },
       {
-        type: "act",
+        type: "Act",
         instruction:
           'Type "Customer Satisfaction Q1 2024" into the survey title input field',
       },
-      { type: "act", instruction: 'Click the "Save" button' },
+      { type: "Act", instruction: 'Click the "Save" button' },
       {
-        type: "check",
+        type: "Check",
         instruction:
           'The text "Customer Satisfaction Q1 2024" is visible on the page',
       },
@@ -45,11 +45,11 @@ describe("buildGoalPrompt", () => {
   it("should handle steps with only act steps (no checks)", () => {
     const steps: SpecStep[] = [
       {
-        type: "act",
+        type: "Act",
         instruction: "Navigate to http://localhost:3000/sign-up",
       },
-      { type: "act", instruction: 'Type "test@example.com" into the email field' },
-      { type: "act", instruction: 'Click the "Sign Up" button' },
+      { type: "Act", instruction: 'Type "test@example.com" into the email field' },
+      { type: "Act", instruction: 'Click the "Sign Up" button' },
     ];
 
     const { goal, successCriteria } = buildGoalPrompt(steps);
@@ -64,7 +64,7 @@ describe("buildGoalPrompt", () => {
   it("should handle steps with only check steps (no actions)", () => {
     const steps: SpecStep[] = [
       {
-        type: "check",
+        type: "Check",
         instruction: "The dashboard is visible",
         checkType: "semantic",
       },
@@ -86,17 +86,17 @@ describe("buildGoalPrompt", () => {
   it("should preserve credential-processed steps verbatim", () => {
     const steps: SpecStep[] = [
       {
-        type: "act",
+        type: "Act",
         instruction:
           'Type "newadmin_1@feedback.com" into the email input field',
       },
       {
-        type: "act",
+        type: "Act",
         instruction: 'Type "password123" into the password input field',
       },
-      { type: "act", instruction: 'Click the "Sign Up" button' },
+      { type: "Act", instruction: 'Click the "Sign Up" button' },
       {
-        type: "check",
+        type: "Check",
         instruction:
           "The page displays a button to create a survey or navigate the application",
       },
@@ -115,14 +115,14 @@ describe("buildGoalPrompt", () => {
 
   it("should include multiple check steps as separate criteria", () => {
     const steps: SpecStep[] = [
-      { type: "act", instruction: 'Click the "Analytics" tab' },
+      { type: "Act", instruction: 'Click the "Analytics" tab' },
       {
-        type: "check",
+        type: "Check",
         instruction: "The NPS score is displayed",
         checkType: "semantic",
       },
       {
-        type: "check",
+        type: "Check",
         instruction: "A chart showing response trends is visible",
         checkType: "semantic",
       },
@@ -139,10 +139,10 @@ describe("buildGoalPrompt", () => {
 
   it("should handle interleaved act and check steps", () => {
     const steps: SpecStep[] = [
-      { type: "act", instruction: 'Click "Create"' },
-      { type: "check", instruction: "A form appears" },
-      { type: "act", instruction: 'Type "Test" into title' },
-      { type: "check", instruction: '"Test" is visible' },
+      { type: "Act", instruction: 'Click "Create"' },
+      { type: "Check", instruction: "A form appears" },
+      { type: "Act", instruction: 'Type "Test" into title' },
+      { type: "Check", instruction: '"Test" is visible' },
     ];
 
     const { goal, successCriteria } = buildGoalPrompt(steps);

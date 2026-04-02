@@ -130,7 +130,7 @@ export async function runAuthBehaviorsSequence(
         // Capture credentials after Sign Up
         if (j === 0 && (behavior.id.includes('sign-up') || behavior.id.includes('signup'))) {
           for (const step of processedSteps) {
-            if (step.type === 'act') {
+            if (step.type === 'Act') {
               credentialTracker.captureFromStep(step.instruction);
             }
           }

@@ -80,10 +80,10 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
-      { type: 'act', instruction: 'Type "user@test.com" into the email input field' },
-      { type: 'act', instruction: 'Type "password123" into the password input field' },
-      { type: 'act', instruction: 'Click the "Sign Up" button' },
+      { type: 'Act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'Act', instruction: 'Type "user@test.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "password123" into the password input field' },
+      { type: 'Act', instruction: 'Click the "Sign Up" button' },
     ];
 
     const result = processStepsWithCredentials(behavior, steps, tracker);
@@ -104,7 +104,7 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Type "user@test.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "user@test.com" into the email input field' },
     ];
 
     // Chain 1
@@ -141,10 +141,10 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
-      { type: 'act', instruction: 'Type "default@test.com" into the email input field' },
-      { type: 'act', instruction: 'Type "default" into the password input field' },
-      { type: 'act', instruction: 'Click the "Sign In" button' },
+      { type: 'Act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'Act', instruction: 'Type "default@test.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "default" into the password input field' },
+      { type: 'Act', instruction: 'Click the "Sign In" button' },
     ];
 
     const result = processStepsWithCredentials(signIn, steps, tracker);
@@ -168,10 +168,10 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
-      { type: 'act', instruction: 'Type "wrong@email.com" into the email input field' },
-      { type: 'act', instruction: 'Type "wrongpassword" into the password input field' },
-      { type: 'act', instruction: 'Click the "Sign In" button' },
+      { type: 'Act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'Act', instruction: 'Type "wrong@email.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "wrongpassword" into the password input field' },
+      { type: 'Act', instruction: 'Click the "Sign In" button' },
     ];
 
     // Scenario name contains "wrong" — should skip injection
@@ -196,10 +196,10 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
-      { type: 'act', instruction: 'Type "agent@company.com" into the email input field' },
-      { type: 'act', instruction: 'Type "demo123" into the password input field' },
-      { type: 'act', instruction: 'Click the "Sign In" button' },
+      { type: 'Act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'Act', instruction: 'Type "agent@company.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "demo123" into the password input field' },
+      { type: 'Act', instruction: 'Click the "Sign In" button' },
     ];
 
     // Valid scenario name — should inject credentials
@@ -221,7 +221,7 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Type "bad@test.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "bad@test.com" into the email input field' },
     ];
 
     const result = processStepsWithCredentials(signIn, steps, tracker, 'User enters invalid credentials');
@@ -240,10 +240,10 @@ describe('processStepsWithCredentials', () => {
       examples: []
     };
     const steps: SpecStep[] = [
-      { type: 'act', instruction: 'Navigate to http://localhost:3000' },
-      { type: 'act', instruction: 'Type "wrong@email.com" into the email input field' },
-      { type: 'act', instruction: 'Type "wrongpassword" into the password input field' },
-      { type: 'act', instruction: 'Click the "Sign In" button' },
+      { type: 'Act', instruction: 'Navigate to http://localhost:3000' },
+      { type: 'Act', instruction: 'Type "wrong@email.com" into the email input field' },
+      { type: 'Act', instruction: 'Type "wrongpassword" into the password input field' },
+      { type: 'Act', instruction: 'Click the "Sign In" button' },
     ];
 
     const result = processStepsWithCredentials(invalidSignIn, steps, tracker);

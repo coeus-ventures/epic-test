@@ -101,7 +101,7 @@ export function processStepsWithCredentials(
   if (behaviorId.includes('sign-up') || behaviorId.includes('signup')) {
     const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
     return steps.map(step => {
-      if (step.type !== 'act') return step;
+      if (step.type !== 'Act') return step;
       const match = step.instruction.match(typePattern);
       if (!match) return step;
       if (match[2].toLowerCase().includes('email')) {
@@ -131,7 +131,7 @@ export function processStepsWithCredentials(
   // Inject captured credentials into first 5 steps (sign-in preamble)
   if (credentialTracker.hasCredentials()) {
     return steps.map((step, index) => {
-      if (step.type === 'act' && index < 5) {
+      if (step.type === 'Act' && index < 5) {
         return { ...step, instruction: credentialTracker.injectIntoStep(step.instruction) };
       }
       return step;

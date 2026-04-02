@@ -83,8 +83,8 @@ describe("help-desk-app — parsing", () => {
     expect(example.steps).toHaveLength(6);
 
     // 5 act steps + 1 check step
-    const acts = example.steps.filter(s => s.type === "act");
-    const checks = example.steps.filter(s => s.type === "check");
+    const acts = example.steps.filter(s => s.type === "Act");
+    const checks = example.steps.filter(s => s.type === "Check");
     expect(acts).toHaveLength(5);
     expect(checks).toHaveLength(1);
 
@@ -115,7 +115,7 @@ describe("help-desk-app — parsing", () => {
     // First scenario: wrong credentials
     const wrongCreds = signIn.examples[0];
     expect(wrongCreds.name).toBe("User enters wrong credentials");
-    const wrongChecks = wrongCreds.steps.filter(s => s.type === "check");
+    const wrongChecks = wrongCreds.steps.filter(s => s.type === "Check");
     expect(wrongChecks).toHaveLength(2);
     expect(wrongChecks[0].instruction).toContain("error message");
     expect(wrongChecks[1].instruction).toContain("sign in form");
@@ -123,7 +123,7 @@ describe("help-desk-app — parsing", () => {
     // Second scenario: valid credentials
     const validCreds = signIn.examples[1];
     expect(validCreds.name).toBe("User signs in successfully");
-    const validChecks = validCreds.steps.filter(s => s.type === "check");
+    const validChecks = validCreds.steps.filter(s => s.type === "Check");
     expect(validChecks).toHaveLength(1);
   });
 });
@@ -266,7 +266,7 @@ describe("help-desk-app — check classification", () => {
   it("should classify text-visibility checks as semantic", async () => {
     const behaviors = await loadBehaviors();
     const createTicket = behaviors.get("create-ticket")!;
-    const check = createTicket.examples[0].steps.find(s => s.type === "check")!;
+    const check = createTicket.examples[0].steps.find(s => s.type === "Check")!;
 
     // 'The text "Cannot login to my account" is visible on the page' → semantic
     expect(check.checkType).toBe("semantic");
@@ -278,7 +278,7 @@ describe("help-desk-app — check classification", () => {
     // All checks in this app are text-visibility or UI-state checks → semantic
     for (const [id, behavior] of behaviors) {
       for (const example of behavior.examples) {
-        const checks = example.steps.filter(s => s.type === "check");
+        const checks = example.steps.filter(s => s.type === "Check");
         for (const check of checks) {
           expect(check.checkType, `${id}: "${check.instruction}" should be semantic`).toBe("semantic");
         }
@@ -315,7 +315,7 @@ describe("help-desk-app — credential tracking", () => {
 
     const tracker = new CredentialTracker();
     for (const step of steps) {
-      if (step.type === "act") {
+      if (step.type === "Act") {
         tracker.captureFromStep(step.instruction);
       }
     }
@@ -349,7 +349,7 @@ describe("help-desk-app — credential tracking", () => {
     // First capture from Sign Up
     const tracker = new CredentialTracker();
     for (const step of signUp.examples[0].steps) {
-      if (step.type === "act") tracker.captureFromStep(step.instruction);
+      if (step.type === "Act") tracker.captureFromStep(step.instruction);
     }
 
     // Process Sign In valid scenario — should inject captured credentials
@@ -372,7 +372,7 @@ describe("help-desk-app — credential tracking", () => {
     // First capture from Sign Up
     const tracker = new CredentialTracker();
     for (const step of signUp.examples[0].steps) {
-      if (step.type === "act") tracker.captureFromStep(step.instruction);
+      if (step.type === "Act") tracker.captureFromStep(step.instruction);
     }
 
     // Process Sign In wrong credentials scenario — should NOT inject

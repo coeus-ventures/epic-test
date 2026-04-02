@@ -78,11 +78,11 @@ describe('runAuthBehaviorsSequence', () => {
       duration: 100,
       failedAt: shouldSucceed ? undefined : {
         stepIndex: 0,
-        step: { type: 'act' as const, instruction: 'test' },
+        step: { type: 'Act' as const, instruction: 'test' },
         context: {
           pageSnapshot: '',
           pageUrl: '',
-          failedStep: { type: 'act' as const, instruction: 'test' },
+          failedStep: { type: 'Act' as const, instruction: 'test' },
           error: 'Test error',
           availableElements: [],
           suggestions: [],
@@ -95,8 +95,8 @@ describe('runAuthBehaviorsSequence', () => {
     const examples = Array.from({ length: exampleCount }, (_, i) => ({
       name: `Execute ${title} ${i + 1}`,
       steps: [
-        { type: 'act' as const, instruction: 'Act: Navigate to http://localhost:3000' },
-        { type: 'act' as const, instruction: 'Act: Click button' },
+        { type: 'Act' as const, instruction: 'Act: Navigate to http://localhost:3000' },
+        { type: 'Act' as const, instruction: 'Act: Click button' },
       ],
     }));
     return { id, title, dependencies: [], examples };
@@ -332,11 +332,11 @@ describe('runAuthBehaviorsSequence', () => {
           duration: 100,
           failedAt: shouldFail ? {
             stepIndex: 0,
-            step: { type: 'act' as const, instruction: 'test' },
+            step: { type: 'Act' as const, instruction: 'test' },
             context: {
               pageSnapshot: '',
               pageUrl: '',
-              failedStep: { type: 'act' as const, instruction: 'test' },
+              failedStep: { type: 'Act' as const, instruction: 'test' },
               error: 'Wrong credentials error',
               availableElements: [],
               suggestions: [],

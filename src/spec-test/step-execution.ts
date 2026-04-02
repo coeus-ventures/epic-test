@@ -183,7 +183,7 @@ function generateSuggestions(
     ];
   }
 
-  if (isNotFound && step.type === 'act') {
+  if (isNotFound && step.type === 'Act') {
     const lower = step.instruction.toLowerCase();
     if (lower.includes('click')) {
       const names = elements.filter(el => el.type === 'button' || el.type === 'link')
@@ -209,7 +209,7 @@ function generateSuggestions(
     return ['The UI element for this action was not found', 'This feature may not be implemented'];
   }
 
-  if (isNotFound && step.type === 'check') {
+  if (isNotFound && step.type === 'Check') {
     return [
       'The expected content was not found on the page',
       'Verify the previous action completed successfully',

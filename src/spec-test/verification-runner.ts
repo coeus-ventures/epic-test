@@ -109,7 +109,7 @@ export async function verifyBehaviorWithDependencies(
     // Capture credentials after Sign Up (from processed steps to get uniquified email)
     if (behavior.id.includes('sign-up') || behavior.id.includes('signup')) {
       processedSteps
-        .filter(s => s.type === 'act')
+        .filter(s => s.type === 'Act')
         .forEach(s => credentialTracker.captureFromStep(s.instruction));
     }
 

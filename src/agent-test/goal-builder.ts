@@ -16,8 +16,8 @@ export function buildGoalPrompt(steps: SpecStep[]): {
   goal: string;
   successCriteria: string[];
 } {
-  const actSteps = steps.filter((s) => s.type === "act");
-  const checkSteps = steps.filter((s) => s.type === "check");
+  const actSteps = steps.filter((s) => s.type === "Act");
+  const checkSteps = steps.filter((s) => s.type === "Check");
 
   const successCriteria = checkSteps.map((s) => s.instruction);
 

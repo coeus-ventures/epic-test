@@ -47,7 +47,7 @@ function createMockStagehand(extractResult?: { passed: boolean }, extractError?:
 
 function makeSemanticCheckStep(instruction: string): SpecStep {
   return {
-    type: 'check',
+    type: 'Check',
     instruction,
     checkType: 'semantic',
   };
@@ -55,7 +55,7 @@ function makeSemanticCheckStep(instruction: string): SpecStep {
 
 function makeDeterministicCheckStep(instruction: string): SpecStep {
   return {
-    type: 'check',
+    type: 'Check',
     instruction,
     checkType: 'deterministic',
   };
@@ -97,7 +97,7 @@ describe('SpecTestRunner', () => {
       (runner as any).tester = mockTester;
       (runner as any).preActUrl = null;
 
-      const step: SpecStep = { type: 'act', instruction: 'Navigate to /dashboard' };
+      const step: SpecStep = { type: 'Act', instruction: 'Navigate to /dashboard' };
       const context: StepContext = {
         stepIndex: 0,
         totalSteps: 1,
@@ -134,7 +134,7 @@ describe('SpecTestRunner', () => {
       (runner as any).tester = mockTester;
       (runner as any).preActUrl = null;
 
-      const step: SpecStep = { type: 'act', instruction: 'Refresh the page' };
+      const step: SpecStep = { type: 'Act', instruction: 'Refresh the page' };
       const context: StepContext = {
         stepIndex: 0,
         totalSteps: 1,
@@ -175,7 +175,7 @@ describe('SpecTestRunner', () => {
       (runner as any).preActUrl = 'http://localhost:8080/dashboard';
 
       const step: SpecStep = {
-        type: 'check',
+        type: 'Check',
         instruction: 'Should see "Welcome back"',
         checkType: 'semantic',
       };
@@ -440,7 +440,7 @@ describe('SpecTestRunner', () => {
 
       const example = {
         name: 'Test example',
-        steps: [{ type: 'act' as const, instruction: 'Click button' }],
+        steps: [{ type: 'Act' as const, instruction: 'Click button' }],
       };
 
       const result = await runner.runExample(example);
@@ -475,7 +475,7 @@ describe('SpecTestRunner', () => {
 
       const example = {
         name: 'Test',
-        steps: [{ type: 'check' as const, instruction: 'URL contains /dashboard', checkType: 'deterministic' as const }],
+        steps: [{ type: 'Check' as const, instruction: 'URL contains /dashboard', checkType: 'deterministic' as const }],
       };
 
       await runner.runExample(example);

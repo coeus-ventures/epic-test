@@ -110,7 +110,7 @@ describe("tryDeterministicCheck", () => {
 
   it("returns {stepResult: null, failed: false} when instruction has no extractable text", async () => {
     const page = makePage();
-    const step = { type: "check" as const, instruction: "The list updates correctly" };
+    const step = { type: "Check" as const, instruction: "The list updates correctly" };
     const result = await tryDeterministicCheck(page as any, step, Date.now());
     expect(result.stepResult).toBeNull();
     expect(result.failed).toBe(false);
@@ -118,7 +118,7 @@ describe("tryDeterministicCheck", () => {
 
   it("returns {stepResult: passing, failed: false} when text is found on page", async () => {
     const page = makePage("Ticket A has been created successfully");
-    const step = { type: "check" as const, instruction: '"Ticket A" appears' };
+    const step = { type: "Check" as const, instruction: '"Ticket A" appears' };
     const result = await tryDeterministicCheck(page as any, step, Date.now());
     expect(result.stepResult?.success).toBe(true);
     expect(result.failed).toBe(false);
@@ -126,7 +126,7 @@ describe("tryDeterministicCheck", () => {
 
   it("returns {stepResult: null, failed: true} when text check fails (text not found)", async () => {
     const page = makePage("Welcome to the app");
-    const step = { type: "check" as const, instruction: '"Ticket A" appears' };
+    const step = { type: "Check" as const, instruction: '"Ticket A" appears' };
     const result = await tryDeterministicCheck(page as any, step, Date.now());
     expect(result.stepResult).toBeNull();
     expect(result.failed).toBe(true);

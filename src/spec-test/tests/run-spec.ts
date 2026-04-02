@@ -66,7 +66,7 @@ async function main() {
     console.log(`${marker} Example ${exampleIndex + 1}: ${example.name}`);
 
     example.steps.forEach((step, i) => {
-      const prefix = step.type === "act" ? "->" : "ok";
+      const prefix = step.type === "Act" ? "->" : "ok";
       const checkType = step.checkType ? ` [${step.checkType}]` : "";
       console.log(`      ${i + 1}. ${prefix} ${step.type.toUpperCase()}: ${step.instruction}${checkType}`);
     });

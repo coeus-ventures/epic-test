@@ -29,7 +29,15 @@ import {
   generateFailureContext,
 } from "./step-execution";
 import { detectPort, resetSession, navigateToPagePath, clearFormFields, safeWaitForLoadState } from "./session-management";
-import { executePageAction, tryNativeInputFill } from "./act-helpers";
+import {
+  executePageAction,
+  tryNativeInputFill,
+  actWithRetry,
+  dismissStaleModal,
+  tryDOMClick,
+  tryFillRequiredInputs,
+  isSubmitAction,
+} from "./act-helpers";
 import { tryDeterministicCheck, executeCheckWithRetry } from "./check-helpers";
 
 /**
@@ -186,7 +194,7 @@ export class SpecTestRunner {
     page: Page, step: SpecStep, stepResult: StepResult, stepIndex: number
   ): Promise<ExampleResult["failedAt"]> {
     const error = new Error(
-      step.type === "act"
+      step.type === "Act"
         ? stepResult.actResult?.error ?? "Act step failed"
         : stepResult.checkResult?.actual ?? "Check step failed"
     );
@@ -309,7 +317,7 @@ export class SpecTestRunner {
     const { page, stagehand, tester } = context;
     const stepStart = Date.now();
 
-    if (step.type === "act") {
+    if (step.type === "Act") {
       this.preActUrl = page.url();
 
       // Direct navigation (more reliable than Stagehand for URLs)
@@ -359,7 +367,7 @@ export class SpecTestRunner {
 
   /** Build a crash-safe ExampleResult when browser/page initialization fails. */
   private buildCrashResult(example: SpecExample, startTime: number, errorMessage: string): ExampleResult {
-    const fallbackStep = example.steps[0] ?? { type: "act" as const, instruction: "initialize" };
+    const fallbackStep = example.steps[0] ?? { type: "Act" as const, instruction: "initialize" };
     return {
       example,
       success: false,
@@ -393,6 +401,9 @@ export class SpecTestRunner {
     const stagehand = this.stagehand!;
     const page = this.page!;
 
+    // Pre-flight: dismiss any stale modal left from a previous step.
+    await dismissStaleModal(page);
+
     const actContext: ActContext = {
       goal,
       lastAct: null,
@@ -421,8 +432,8 @@ export class SpecTestRunner {
       tester.clearSnapshots();
       await tester.snapshot(page);
 
-      // ACT
-      await stagehand.act(enrichedInstruction);
+      // ACT — with retry on transient API errors (ECONNRESET, schema, rate limit)
+      await actWithRetry(stagehand, enrichedInstruction);
 
       // SNAPSHOT: after (evaluator uses before→after diff)
       await tester.snapshot(page);
@@ -435,8 +446,7 @@ export class SpecTestRunner {
 
       if (result.status === "complete") return;
       if (result.status === "failed") {
-        // Native input fallback: handles input[type="date/time/datetime-local"] where
-        // stagehand.act() generates an invalid xpath into the shadow DOM.
+        // Fallback 1: native date/time shadow DOM inputs
         const nativeFill = await tryNativeInputFill(page, stagehand, enrichedInstruction);
         if (nativeFill) {
           tester.clearSnapshots();
@@ -451,8 +461,48 @@ export class SpecTestRunner {
             actContext.nextContext = reEval.nextContext;
             continue;
           }
-          // reEval also "failed" — fall through to throw
+          // reEval also "failed" — fall through to next fallback
         }
+
+        // Fallback 2: DOM-based click for elements outside Stagehand's a11y tree
+        // (NPS scales, custom radio buttons, aria-label-only elements, etc.)
+        // The "before" snapshot is already set — just add the "after" snapshot.
+        const domClicked = await tryDOMClick(page, enrichedInstruction);
+        if (domClicked) {
+          await tester.snapshot(page);
+          actContext.lastAct = `DOM click for: ${enrichedInstruction}`;
+          const reEval = await evaluateActResult(tester, stagehand, actContext);
+          if (reEval.status === "complete") return;
+          if (reEval.status === "incomplete") {
+            actContext.history.push({ act: actContext.lastAct, outcome: reEval.reason });
+            actContext.nextContext = reEval.nextContext;
+            continue;
+          }
+          // reEval also "failed" — fall through to next fallback
+        }
+
+        // Fallback 3: fill empty required fields, then retry the submit.
+        // HTML5 required-field validation blocks submission without any DOM change,
+        // causing the evaluator to return "failed" even though the button exists.
+        if (isSubmitAction(enrichedInstruction)) {
+          const filledCount = await tryFillRequiredInputs(page);
+          if (filledCount > 0) {
+            tester.clearSnapshots();
+            await tester.snapshot(page);
+            await actWithRetry(stagehand, enrichedInstruction);
+            await tester.snapshot(page);
+            actContext.lastAct = `retry submit after filling ${filledCount} required field(s)`;
+            const reEval = await evaluateActResult(tester, stagehand, actContext);
+            if (reEval.status === "complete") return;
+            if (reEval.status === "incomplete") {
+              actContext.history.push({ act: actContext.lastAct, outcome: reEval.reason });
+              actContext.nextContext = reEval.nextContext;
+              continue;
+            }
+            // still failed — fall through to throw
+          }
+        }
+
         throw new Error(`Act step failed: ${result.reason}`);
       }
 

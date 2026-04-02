@@ -14,11 +14,11 @@ describe('verifyBehaviorWithDependencies', () => {
         duration: 1000,
         failedAt: shouldSucceed ? undefined : {
           stepIndex: 0,
-          step: { type: 'act', instruction: 'test' },
+          step: { type: 'Act', instruction: 'test' },
           context: {
             pageSnapshot: '',
             pageUrl: '',
-            failedStep: { type: 'act', instruction: 'test' },
+            failedStep: { type: 'Act', instruction: 'test' },
             error: 'Test error',
             availableElements: [],
             suggestions: []
@@ -230,21 +230,21 @@ describe('verifyBehaviorWithDependencies', () => {
       id: 'sign-up',
       title: 'Sign Up',
       dependencies: [],
-      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Fill form' }] }]
+      examples: [{ name: 'test', steps: [{ type: 'Act', instruction: 'Fill form' }] }]
     };
     const createProject: HarborBehavior = {
       id: 'create-project',
       title: 'Create Project',
       dependencies: [{ behaviorId: 'sign-up' }],
       pagePath: '/projects',
-      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Click Create' }] }]
+      examples: [{ name: 'test', steps: [{ type: 'Act', instruction: 'Click Create' }] }]
     };
     const createIssue: HarborBehavior = {
       id: 'create-issue',
       title: 'Create Issue',
       dependencies: [{ behaviorId: 'create-project' }],
       pagePath: '/projects',
-      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Click Create Issue' }] }]
+      examples: [{ name: 'test', steps: [{ type: 'Act', instruction: 'Click Create Issue' }] }]
     };
 
     behaviors.set('sign-up', signUp);
@@ -290,14 +290,14 @@ describe('verifyBehaviorWithDependencies', () => {
       id: 'sign-up',
       title: 'Sign Up',
       dependencies: [],
-      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Fill form' }] }]
+      examples: [{ name: 'test', steps: [{ type: 'Act', instruction: 'Fill form' }] }]
     };
     const viewContacts: HarborBehavior = {
       id: 'view-contacts',
       title: 'View Contacts',
       dependencies: [{ behaviorId: 'sign-up' }],
       pagePath: '/contacts',
-      examples: [{ name: 'test', steps: [{ type: 'act', instruction: 'Click Add Contact' }] }]
+      examples: [{ name: 'test', steps: [{ type: 'Act', instruction: 'Click Add Contact' }] }]
     };
 
     behaviors.set('sign-up', signUp);

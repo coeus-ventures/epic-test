@@ -138,7 +138,7 @@ describe("SpecTestRunner Integration", () => {
       const exampleResult = result.exampleResults[0];
 
       // Check Act results
-      const actSteps = exampleResult.steps.filter(s => s.step.type === "act");
+      const actSteps = exampleResult.steps.filter(s => s.step.type === "Act");
       actSteps.forEach(step => {
         expect(step.actResult).toBeDefined();
         expect(step.actResult?.success).toBe(true);
@@ -146,7 +146,7 @@ describe("SpecTestRunner Integration", () => {
       });
 
       // Check Check results
-      const checkSteps = exampleResult.steps.filter(s => s.step.type === "check");
+      const checkSteps = exampleResult.steps.filter(s => s.step.type === "Check");
       checkSteps.forEach(step => {
         expect(step.checkResult).toBeDefined();
         expect(step.checkResult?.passed).toBe(true);

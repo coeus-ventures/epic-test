@@ -145,7 +145,7 @@ export class AgentTestRunner implements BehaviorRunner {
           duration: Date.now() - startTime,
           failedAt: {
             stepIndex: 0,
-            step: { type: "act", instruction: goal },
+            step: { type: "Act", instruction: goal },
             context: await this.buildAgentFailureContext(
               page,
               goal,
@@ -294,7 +294,7 @@ export class AgentTestRunner implements BehaviorRunner {
       );
 
       const checkStepResults = checkResults.map((check) => ({
-        step: { type: "check" as const, instruction: check.instruction },
+        step: { type: "Check" as const, instruction: check.instruction },
         success: check.passed,
         duration: 0,
         checkResult: {
@@ -334,7 +334,7 @@ export class AgentTestRunner implements BehaviorRunner {
     agentResult: AgentExecutionResult
   ): StepResult {
     return {
-      step: { type: "act", instruction: goal },
+      step: { type: "Act", instruction: goal },
       success: agentResult.success,
       duration: 0,
       actResult: {
@@ -371,7 +371,7 @@ export class AgentTestRunner implements BehaviorRunner {
     return {
       pageSnapshot,
       pageUrl,
-      failedStep: { type: "act", instruction: goal },
+      failedStep: { type: "Act", instruction: goal },
       error: agentResult.message || "Agent failed to complete the task",
       availableElements: [],
       suggestions: [
@@ -395,7 +395,7 @@ export class AgentTestRunner implements BehaviorRunner {
     return {
       pageSnapshot,
       pageUrl,
-      failedStep: { type: "check", instruction },
+      failedStep: { type: "Check", instruction },
       error: `Verification failed: ${actual}`,
       availableElements: [],
       suggestions: [
@@ -417,7 +417,7 @@ export class AgentTestRunner implements BehaviorRunner {
     const errorMessage =
       error instanceof Error ? error.message : String(error);
     const fallbackStep = example.steps[0] ?? {
-      type: "act" as const,
+      type: "Act" as const,
       instruction: "initialize",
     };
 

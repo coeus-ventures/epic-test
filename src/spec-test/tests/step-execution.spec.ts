@@ -263,7 +263,7 @@ describe("generateFailureContext", () => {
         .mockResolvedValueOnce("<html><body>Test page</body></html>")
         .mockResolvedValueOnce([]),
     } as unknown as Page;
-    const step: SpecStep = { type: "act", instruction: "Click Submit button" };
+    const step: SpecStep = { type: "Act", instruction: "Click Submit button" };
     const error = new Error("Element not found");
 
     const context = await generateFailureContext(mockPage, step, error);
@@ -286,7 +286,7 @@ describe("generateFailureContext", () => {
         .mockResolvedValueOnce("<html><body>Form</body></html>")
         .mockResolvedValueOnce(mockElements),
     } as unknown as Page;
-    const step: SpecStep = { type: "act", instruction: "Click Submit button" };
+    const step: SpecStep = { type: "Act", instruction: "Click Submit button" };
     const error = new Error("Element not found");
 
     const context = await generateFailureContext(mockPage, step, error);
@@ -303,7 +303,7 @@ describe("generateFailureContext", () => {
         .mockResolvedValueOnce("<html></html>")
         .mockResolvedValueOnce([{ type: "button", text: "Save", selector: "button#save" }]),
     } as unknown as Page;
-    const step: SpecStep = { type: "act", instruction: "Click Submit button" };
+    const step: SpecStep = { type: "Act", instruction: "Click Submit button" };
     const error = new Error("Element not found");
 
     const context = await generateFailureContext(mockPage, step, error);
@@ -319,7 +319,7 @@ describe("generateFailureContext", () => {
         .mockResolvedValueOnce("<html></html>")
         .mockResolvedValueOnce([]),
     } as unknown as Page;
-    const step: SpecStep = { type: "act", instruction: "Wait for modal" };
+    const step: SpecStep = { type: "Act", instruction: "Wait for modal" };
     const error = new Error("Timeout waiting for element");
 
     const context = await generateFailureContext(mockPage, step, error);
@@ -335,7 +335,7 @@ describe("generateFailureContext", () => {
         .mockResolvedValueOnce("<html></html>")
         .mockResolvedValueOnce([]),
     } as unknown as Page;
-    const step: SpecStep = { type: "check", instruction: "URL contains /profile", checkType: "deterministic" };
+    const step: SpecStep = { type: "Check", instruction: "URL contains /profile", checkType: "deterministic" };
     const error = new Error("Check failed: expected /profile");
 
     const context = await generateFailureContext(mockPage, step, error);

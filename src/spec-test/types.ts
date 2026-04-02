@@ -174,8 +174,8 @@ export interface ActEvalResult {
  * A single step in a specification
  */
 export interface SpecStep {
-  /** Step type: act for actions, check for verifications */
-  type: "act" | "check";
+  /** Step type: Act for actions, Check for verifications, Await for async operations */
+  type: "Act" | "Check" | "Await";
   /** Natural language instruction */
   instruction: string;
   /** For checks: deterministic or semantic */

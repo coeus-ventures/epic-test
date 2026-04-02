@@ -17,12 +17,12 @@ describe("parseSteps", () => {
 
     expect(steps).toHaveLength(2);
     expect(steps[0]).toEqual({
-      type: "act",
+      type: "Act",
       instruction: "User navigates to /login",
       lineNumber: expect.any(Number),
     });
     expect(steps[1]).toEqual({
-      type: "act",
+      type: "Act",
       instruction: "User clicks Login button",
       lineNumber: expect.any(Number),
     });
@@ -38,13 +38,13 @@ describe("parseSteps", () => {
 
     expect(steps).toHaveLength(2);
     expect(steps[0]).toEqual({
-      type: "check",
+      type: "Check",
       instruction: "URL contains /dashboard",
       checkType: "deterministic",
       lineNumber: expect.any(Number),
     });
     expect(steps[1]).toEqual({
-      type: "check",
+      type: "Check",
       instruction: "Page title is 'Home'",
       checkType: "deterministic",
       lineNumber: expect.any(Number),
@@ -61,13 +61,13 @@ describe("parseSteps", () => {
 
     expect(steps).toHaveLength(2);
     expect(steps[0]).toEqual({
-      type: "check",
+      type: "Check",
       instruction: "Error message is displayed",
       checkType: "semantic",
       lineNumber: expect.any(Number),
     });
     expect(steps[1]).toEqual({
-      type: "check",
+      type: "Check",
       instruction: "Welcome message is displayed",
       checkType: "semantic",
       lineNumber: expect.any(Number),
@@ -112,18 +112,18 @@ describe("parseSpecFile", () => {
     expect(spec.examples[0].name).toBe("Login with valid credentials");
     expect(spec.examples[0].steps).toHaveLength(6);
     expect(spec.examples[0].steps[0]).toEqual({
-      type: "act",
+      type: "Act",
       instruction: "User navigates to /login",
       lineNumber: expect.any(Number),
     });
     expect(spec.examples[0].steps[4]).toEqual({
-      type: "check",
+      type: "Check",
       instruction: "URL contains /dashboard",
       checkType: "deterministic",
       lineNumber: expect.any(Number),
     });
     expect(spec.examples[0].steps[5]).toEqual({
-      type: "check",
+      type: "Check",
       instruction: "Welcome message is displayed",
       checkType: "semantic",
       lineNumber: expect.any(Number),

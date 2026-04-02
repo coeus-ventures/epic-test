@@ -7,10 +7,10 @@ import type { SpecStep, SpecExample, TestableSpec, HarborBehavior } from "./type
 import { classifyCheck } from "./classify";
 
 /**
- * Regex pattern to match Act and Check step lines.
- * Captures: (1) step type (Act|Check), (2) instruction text
+ * Regex pattern to match Act, Check, and Await step lines.
+ * Captures: (1) step type (Act|Check|Await), (2) instruction text
  */
-const STEP_PATTERN = /^\s*\*\s*(Act|Check):\s*(.+)$/;
+const STEP_PATTERN = /^\s*\*\s*(Act|Check|Await):\s*(.+)$/;
 
 /**
  * Parses the Steps section from markdown content into an array of executable steps.
@@ -28,11 +28,15 @@ export function parseSteps(content: string): SpecStep[] {
       const lineNumber = index + 1;
 
       if (stepType === "Act") {
-        return [{ type: "act", instruction, lineNumber }];
+        return [{ type: "Act", instruction, lineNumber }];
+      }
+
+      if (stepType === "Await") {
+        return [{ type: "Await", instruction, lineNumber }];
       }
 
       return [{
-        type: "check",
+        type: "Check",
         instruction,
         checkType: classifyCheck(instruction),
         lineNumber,
@@ -208,11 +212,13 @@ function parseStepLine(trimmedLine: string, example: SpecExample, lineNumber: nu
 
   const [, stepType, rawInstruction] = stepMatch;
   const instruction = rawInstruction.trim();
-  example.steps.push(
-    stepType === "Act"
-      ? { type: "act", instruction, lineNumber }
-      : { type: "check", instruction, checkType: classifyCheck(instruction), lineNumber }
-  );
+  if (stepType === "Act") {
+    example.steps.push({ type: "Act", instruction, lineNumber });
+  } else if (stepType === "Await") {
+    example.steps.push({ type: "Await", instruction, lineNumber });
+  } else {
+    example.steps.push({ type: "Check", instruction, checkType: classifyCheck(instruction), lineNumber });
+  }
   return true;
 }
 
@@ -364,10 +370,12 @@ function parseExamplesSection(
         const instruction = rawInstruction.trim();
 
         if (stepType === "Act") {
-          currentExample.steps.push({ type: "act", instruction, lineNumber });
+          currentExample.steps.push({ type: "Act", instruction, lineNumber });
+        } else if (stepType === "Await") {
+          currentExample.steps.push({ type: "Await", instruction, lineNumber });
         } else {
           currentExample.steps.push({
-            type: "check",
+            type: "Check",
             instruction,
             checkType: classifyCheck(instruction),
             lineNumber,

@@ -50,7 +50,7 @@ describe('verifyAllBehaviors', () => {
       id,
       title,
       dependencies: [],
-      examples: [{ name: title, steps: [{ type: 'act', instruction: 'Click button' }] }],
+      examples: [{ name: title, steps: [{ type: 'Act', instruction: 'Click button' }] }],
     };
   }
 

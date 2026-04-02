@@ -284,7 +284,7 @@ async function runAuthFlowContinuous(
           behavior.id.includes("signup")
         ) {
           for (const step of processedSteps) {
-            if (step.type === "act") {
+            if (step.type === "Act") {
               credentialTracker.captureFromStep(step.instruction);
             }
           }
