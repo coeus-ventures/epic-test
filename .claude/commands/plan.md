@@ -1,34 +1,33 @@
 ---
-description: Update issue file with detailed implementation plan
-argument-hint: @docs/issues/[issue-file].md
+description: Create implementation plan for an issue
+argument-hint: @docs/refactoring-spec.md or issue description
 ---
 
 # Plan
 
 Instructions: $ARGUMENTS
 
-Update the issue file with a detailed implementation plan.
+Create a detailed implementation plan for the issue.
 
 ## Steps
 
-1. **Explore First** - Navigate to relevant source folders to understand what's already implemented. Check existing types, interfaces, and patterns. Don't change anything in this phase.
+1. **Explore** — Read relevant source files to understand current state. Check existing types, patterns, and imports. Don't change anything.
 
-2. **Write the Plan** - Update the issue file with a plan that includes:
-   - What needs to be created or changed
-   - Which layer(s) are affected (CLI, Core, Adapters)
-   - Key types and interfaces
-   - Test cases (focus on happy path)
+2. **Write the Plan** — Include:
+   - What needs to be created or changed (with file paths)
+   - Which module(s) are affected (shared, spec-test, agent-test, claude-test, b-test)
+   - Which coding discipline principles apply (SRP, DRY, top-down order, etc.)
+   - Test cases needed (characterization tests if refactoring, unit tests if new code)
 
-## Issue Naming Conventions
-
-- `Implement [component] in [layer]`
-- `Add [feature] to [domain]`
-- `Fix [bug] in [component]`
-- `Refactor [component] to [pattern]`
+3. **Identify Agent** — Which agent handles the work:
+   - `shared-writer` for `src/shared/`
+   - `module-writer` for `src/spec-test/`, `src/agent-test/`, `src/claude-test/`, `src/b-test/`
+   - `test-writer` for tests
 
 ## Planning Guidelines
 
-- If the module already exists, focus on what needs to change
+- Read `.claude/skills/coding_discipline/SKILL.md` before proposing structure
+- If refactoring, plan characterization tests FIRST
 - Follow existing patterns in the codebase
-- Keep test cases minimal - one happy path test per component
-- Identify dependencies between layers
+- Keep test cases minimal — one happy path per function
+- Identify dependencies between modules
