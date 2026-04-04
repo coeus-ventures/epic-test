@@ -23,7 +23,7 @@ import type { VerificationSummary } from "../types";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const INSTRUCTION_PATH = path.join(__dirname, "fixtures/help-desk-app/instruction.md");
+const INSTRUCTION_PATH = path.resolve(__dirname, "..", "..", "..", "test-fixtures", "help-desk-app", "instruction.md");
 
 // Top-level await so the flag is set before it.skipIf() evaluates at collection time.
 const appRunning = await (async () => {

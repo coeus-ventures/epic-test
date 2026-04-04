@@ -24,6 +24,7 @@ coverage/
 .vitest/
 test-cache-temp/
 test-cache-mgmt-temp/
+test-results/
 
 # Cache
 .cache/

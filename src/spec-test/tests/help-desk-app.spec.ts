@@ -17,7 +17,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const FIXTURE_PATH = path.join(__dirname, "fixtures", "help-desk-app", "instruction.md");
+const FIXTURE_PATH = path.resolve(__dirname, "..", "..", "..", "test-fixtures", "help-desk-app", "instruction.md");
 
 async function loadBehaviors() {
   const content = await readFile(FIXTURE_PATH, "utf-8");

@@ -42,5 +42,8 @@ export { topologicalSort } from "./topological-sort";
 export { BaseStagehandRunner } from "./base-runner";
 export type { BaseRunnerConfig } from "./base-runner";
 
+// --- Verify Utils ---
+export { resolveFixturePath, printVerificationResults, saveVerificationResults } from "./verify-utils";
+
 // --- Parsing (re-exported from spec-test — depends on classify which is spec-test-specific) ---
 export { parseSteps, parseExamples, parseHarborBehaviorsWithDependencies, parseSpecFile } from "../spec-test/parsing";
