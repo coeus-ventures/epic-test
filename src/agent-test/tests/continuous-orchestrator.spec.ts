@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { HarborBehavior } from "../../spec-test/types";
 import {
-  topologicalSort,
   partitionBehaviors,
   buildTransitiveDependentsMap,
 } from "../continuous-orchestrator";
+import { topologicalSort } from "../../shared/topological-sort";
 
 // ============================================================================
 // HELPERS — build test behavior graphs
@@ -124,10 +124,10 @@ describe("topologicalSort", () => {
     // Every behavior must appear after all its dependencies
     for (const [id, behavior] of map) {
       for (const dep of behavior.dependencies) {
-        expect(ids.indexOf(dep.behaviorId)).toBeLessThan(
-          ids.indexOf(id),
+        expect(
+          ids.indexOf(dep.behaviorId),
           `${dep.behaviorId} should come before ${id}`
-        );
+        ).toBeLessThan(ids.indexOf(id));
       }
     }
 

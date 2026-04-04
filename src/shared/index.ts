@@ -39,6 +39,9 @@ export { detectPort, resetSession, navigateToPagePath, clearFormFields, urlsMatc
 // --- Auth Orchestrator ---
 export { isAuthBehavior, runAuthBehaviorsSequence, withTimeout, DEFAULT_BEHAVIOR_TIMEOUT_MS, AUTH_ORDER } from "./auth-orchestrator";
 
+// --- Topological Sort ---
+export { topologicalSort } from "./topological-sort";
+
 // --- Base Runner ---
 export { BaseStagehandRunner } from "./base-runner";
 export type { BaseRunnerConfig } from "./base-runner";

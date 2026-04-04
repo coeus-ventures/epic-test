@@ -10,69 +10,34 @@
 import type { HarborBehavior } from "../shared/types";
 import type { CredentialContext } from "./types";
 import { extractCredentials } from "./credential-extractor";
+import { topologicalSort as sharedTopologicalSort } from "../shared/topological-sort";
 
+/** Auth IDs in claude-test canonical order (sign-up → sign-in → sign-out). */
 const AUTH_IDS = ["sign-up", "sign-in", "sign-out"];
 const AUTH_SET = new Set(AUTH_IDS);
 
-// ─── Topological Sort ────────────────────────────────────────────────
-
 /**
  * Topological sort with auth-first partitioning.
- * Auth behaviors (sign-up, sign-in, sign-out) come first in canonical order,
- * then non-auth behaviors in dependency order via Kahn's algorithm.
+ * Auth behaviors come first in canonical order,
+ * then non-auth behaviors in dependency order.
  */
 export function topologicalSort(behaviors: HarborBehavior[]): HarborBehavior[] {
   const byId = new Map(behaviors.map((b) => [b.id, b]));
 
-  // Auth partition: canonical order
-  const auth = AUTH_IDS.filter((id) => byId.has(id)).map((id) => byId.get(id)!);
-  const nonAuth = behaviors.filter((b) => !AUTH_SET.has(b.id));
+  const auth = AUTH_IDS
+    .filter((id) => byId.has(id))
+    .map((id) => byId.get(id)!);
 
-  // Kahn's algorithm on non-auth behaviors
-  const nonAuthIds = new Set(nonAuth.map((b) => b.id));
-  const inDegree = new Map(nonAuth.map((b) => [b.id, 0]));
+  // Strip auth dependencies before passing to shared sort — auth is already handled
+  const nonAuthMap = new Map(
+    behaviors
+      .filter((b) => !AUTH_SET.has(b.id))
+      .map((b) => [b.id, { ...b, dependencies: b.dependencies.filter((d) => !AUTH_SET.has(d.behaviorId)) }] as const),
+  );
 
-  for (const b of nonAuth) {
-    for (const dep of b.dependencies) {
-      if (nonAuthIds.has(dep.behaviorId)) {
-        inDegree.set(b.id, (inDegree.get(b.id) ?? 0) + 1);
-      }
-    }
-  }
+  const sortedNonAuth = sharedTopologicalSort(nonAuthMap);
 
-  const queue = nonAuth
-    .filter((b) => inDegree.get(b.id) === 0)
-    .map((b) => b.id)
-    .sort();
-
-  const sorted: HarborBehavior[] = [];
-  const nonAuthById = new Map(nonAuth.map((b) => [b.id, b]));
-
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    sorted.push(nonAuthById.get(id)!);
-
-    for (const b of nonAuth) {
-      for (const dep of b.dependencies) {
-        if (dep.behaviorId === id && nonAuthIds.has(b.id)) {
-          const newDeg = (inDegree.get(b.id) ?? 1) - 1;
-          inDegree.set(b.id, newDeg);
-          if (newDeg === 0) {
-            queue.push(b.id);
-            queue.sort();
-          }
-        }
-      }
-    }
-  }
-
-  if (sorted.length !== nonAuth.length) {
-    const sortedIds = new Set(sorted.map((b) => b.id));
-    const remaining = nonAuth.filter((b) => !sortedIds.has(b.id)).map((b) => b.id);
-    throw new Error(`Cycle detected in behavior dependencies: ${remaining.join(", ")}`);
-  }
-
-  return [...auth, ...sorted];
+  return [...auth, ...sortedNonAuth];
 }
 
 // ─── Credential Rewriting ────────────────────────────────────────────

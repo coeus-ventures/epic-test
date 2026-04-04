@@ -22,10 +22,10 @@ export { verifyOutcome } from "./verifier";
 // --- Continuous Orchestrator ---
 export {
   verifyAllBehaviorsContinuous,
-  topologicalSort,
   partitionBehaviors,
   buildTransitiveDependentsMap,
 } from "./continuous-orchestrator";
+export { topologicalSort } from "../shared/topological-sort";
 
 // --- Re-exports from spec-test (orchestration layer) ---
 export { verifyAllBehaviors } from "../spec-test/orchestrator";
