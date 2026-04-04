@@ -1,7 +1,3 @@
-// ============================================================================
-// CHECK HELPERS — retry orchestration, deterministic fast-path, extract double-check
-// ============================================================================
-
 import { z } from "zod";
 import type { Page } from "playwright";
 import type { Stagehand } from "@browserbasehq/stagehand";
@@ -26,6 +22,111 @@ IMPORTANT evaluation rules:
 - "button to create X" includes buttons like "Create X", "Add X", "New X", or a "+" button
 - For visual state indicators (edited, pinned, starred, archived, resolved, etc.), look for ANY visual cue: small text labels like "(edited)", icons (pin, star, check), CSS classes, badges, status tags, tooltips, or color changes
 - Only pass if you can identify the SPECIFIC element or text that satisfies the condition. Do not infer or assume.`;
+
+/**
+ * Execute a Check step with retry logic.
+ *
+ * Oracle strategy depends on page transition:
+ * - Same page: b-test (diff) primary → extract() rescue on failure
+ * - Page transition: extract() primary → b-test rescue on failure
+ *
+ * Concordance gates (activated when deterministicFailed=true):
+ * - Negative concordance: b-test "No changes" + deterministic failed → skip extract()
+ * - Evidence gate: deterministic failed → extract() must return foundText to pass
+ */
+export async function executeCheckWithRetry(
+  instruction: string,
+  checkType: "deterministic" | "semantic",
+  page: Page,
+  tester: Tester,
+  stagehand: Stagehand,
+  pageTransitioned: boolean = false,
+  deterministicFailed: boolean = false
+): Promise<CheckResult> {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = pageTransitioned
+        ? await runPageTransitionOracle(instruction, stagehand, page, tester, checkType, attempt)
+        : await runSamePageOracle(instruction, checkType, page, tester, stagehand, deterministicFailed);
+
+      if (result.passed) return result;
+      if (canRetry(checkType, attempt)) { await delay(RETRY_DELAY); continue; }
+
+      return checkType === "semantic"
+        ? { ...result, actual: await getCheckErrorContext(page, instruction, attempt) }
+        : result;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (isRetryableError(msg) && attempt < MAX_RETRIES) { await delay(RETRY_DELAY); continue; }
+      return { passed: false, checkType, expected: instruction, actual: await getCheckErrorContext(page, instruction, attempt) };
+    }
+  }
+
+  return { passed: false, checkType, expected: instruction, actual: await getCheckErrorContext(page, instruction, MAX_RETRIES) };
+}
+
+async function runPageTransitionOracle(
+  instruction: string, stagehand: Stagehand, page: Page, tester: Tester,
+  checkType: "deterministic" | "semantic", attempt: number,
+): Promise<CheckResult> {
+  console.log(`Page transitioned (attempt ${attempt}/${MAX_RETRIES}) — extract() primary for: "${instruction.slice(0, 80)}..."`);
+
+  if (await doubleCheckWithExtract(instruction, stagehand)) {
+    return { passed: true, checkType: "semantic", expected: instruction, actual: "Confirmed by extract() (page transition)" };
+  }
+
+  const bTestResult = await executeCheckStep(instruction, checkType, page, tester);
+  if (bTestResult.passed) {
+    return { passed: true, checkType: "semantic", expected: instruction, actual: "Confirmed by b-test (extract false negative mitigated)" };
+  }
+  return bTestResult;
+}
+
+async function runSamePageOracle(
+  instruction: string, checkType: "deterministic" | "semantic",
+  page: Page, tester: Tester, stagehand: Stagehand, deterministicFailed: boolean,
+): Promise<CheckResult> {
+  const result = await executeCheckStep(instruction, checkType, page, tester);
+  if (result.passed) return result;
+  if (checkType !== "semantic") return result;
+
+  const rescued = await applyConcordanceGate(instruction, stagehand, tester, deterministicFailed);
+  if (rescued) return { passed: true, checkType: "semantic", expected: instruction, actual: rescued };
+
+  return result;
+}
+
+async function applyConcordanceGate(
+  instruction: string, stagehand: Stagehand, tester: Tester, deterministicFailed: boolean,
+): Promise<string | null> {
+  if (!deterministicFailed) {
+    if (await doubleCheckWithExtract(instruction, stagehand)) return "Confirmed by extract() (b-test false negative mitigated)";
+    return null;
+  }
+
+  if (await noChangesDetected(tester)) {
+    // Two oracles (deterministic + b-test) both signal failure — single extract() cannot override
+    console.log(`[executeCheckWithRetry] Negative concordance: b-test "No changes" + deterministic FAIL — skipping extract() rescue`);
+    return null;
+  }
+
+  // Page did change — require extract() to cite specific evidence
+  if (await doubleCheckWithExtract(instruction, stagehand, true)) {
+    return "Confirmed by extract() with evidence (b-test false negative mitigated)";
+  }
+  return null;
+}
+
+async function noChangesDetected(tester: Tester): Promise<boolean> {
+  try {
+    const diffResult = await tester.diff();
+    return diffResult.summary.includes("No changes");
+  } catch { return false; }
+}
+
+function canRetry(checkType: "deterministic" | "semantic", attempt: number): boolean {
+  return checkType === "semantic" && attempt < MAX_RETRIES;
+}
 
 /**
  * Double-check a semantic failure using stagehand.extract().
@@ -89,131 +190,25 @@ export async function tryDeterministicCheck(
       return document.body.innerText.includes(text);
     }, textCheck.text).catch(() => false);
     const passed = textCheck.shouldExist ? exists : !exists;
-    if (passed) {
-      return {
-        stepResult: {
-          step,
-          success: true,
-          duration: Date.now() - stepStart,
-          checkResult: {
-            passed: true,
-            checkType: "deterministic",
-            expected: step.instruction,
-            actual: exists ? `Found "${textCheck.text}" on page` : `Text "${textCheck.text}" not on page (expected absent)`,
-          },
+
+    if (!passed) {
+      console.log(`[runStep] Deterministic text check failed for "${textCheck.text}" — falling through to semantic oracle`);
+      return { stepResult: null, failed: true };
+    }
+
+    return {
+      stepResult: {
+        step,
+        success: true,
+        duration: Date.now() - stepStart,
+        checkResult: {
+          passed: true,
+          checkType: "deterministic",
+          expected: step.instruction,
+          actual: exists ? `Found "${textCheck.text}" on page` : `Text "${textCheck.text}" not on page (expected absent)`,
         },
-        failed: false,
-      };
-    }
-    console.log(`[runStep] Deterministic text check failed for "${textCheck.text}" — falling through to semantic oracle`);
-    return { stepResult: null, failed: true };
-  } catch { /* fall through to semantic check */ }
-
-  return { stepResult: null, failed: false };
-}
-
-/**
- * Execute a Check step with retry logic.
- *
- * Oracle strategy depends on page transition:
- * - Same page: b-test (diff) primary → extract() rescue on failure
- * - Page transition: extract() primary → b-test rescue on failure
- *
- * b-test diffs are unreliable after full page transitions because the entire
- * DOM changes. extract() evaluates current page state directly.
- *
- * Concordance gates (activated when deterministicFailed=true):
- * - Negative concordance: b-test "No changes" + deterministic failed → skip extract()
- * - Evidence gate: deterministic failed → extract() must return foundText to pass
- */
-export async function executeCheckWithRetry(
-  instruction: string,
-  checkType: "deterministic" | "semantic",
-  page: Page,
-  tester: Tester,
-  stagehand: Stagehand,
-  pageTransitioned: boolean = false,
-  deterministicFailed: boolean = false
-): Promise<CheckResult> {
-  let lastAttempt = 1;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    lastAttempt = attempt;
-    try {
-      if (checkType === "semantic" && pageTransitioned) {
-        // Page transition: extract() primary → b-test rescue
-        console.log(`Page transitioned (attempt ${attempt}/${MAX_RETRIES}) — extract() primary for: "${instruction.slice(0, 80)}..."`);
-        if (await doubleCheckWithExtract(instruction, stagehand)) {
-          return { passed: true, checkType: "semantic", expected: instruction, actual: "Confirmed by extract() (page transition)" };
-        }
-        const bTestResult = await executeCheckStep(instruction, checkType, page, tester);
-        if (bTestResult.passed) {
-          return { passed: true, checkType: "semantic", expected: instruction, actual: "Confirmed by b-test (extract false negative mitigated)" };
-        }
-        if (attempt < MAX_RETRIES) { await delay(RETRY_DELAY); continue; }
-        return { ...bTestResult, actual: await getCheckErrorContext(page, instruction, attempt) };
-      }
-
-      // Same page: b-test primary → extract() rescue
-      const result = await executeCheckStep(instruction, checkType, page, tester);
-      if (result.passed) return result;
-
-      if (checkType === "semantic") {
-        // Concordance gates — active when deterministic check already signalled failure
-        if (deterministicFailed) {
-          // Check if b-test also detected no page changes
-          let noChangesDetected = false;
-          try {
-            const diffResult = await tester.diff();
-            noChangesDetected = diffResult.summary.includes("No changes");
-          } catch { /* tester may not have both snapshots yet — treat as unknown */ }
-
-          if (noChangesDetected) {
-            // Negative concordance: two oracles (deterministic + b-test) both signal failure.
-            // Skip extract() — a single extract() pass cannot override two negative signals.
-            console.log(`[executeCheckWithRetry] Negative concordance: b-test "No changes" + deterministic FAIL — skipping extract() rescue`);
-          } else {
-            // Evidence gate: deterministic failed, but page did change — require extract() to cite specific evidence
-            if (await doubleCheckWithExtract(instruction, stagehand, true)) {
-              return { passed: true, checkType: "semantic", expected: instruction, actual: "Confirmed by extract() with evidence (b-test false negative mitigated)" };
-            }
-          }
-        } else {
-          // No concordance constraint — use generous extract() rescue (original behavior)
-          if (await doubleCheckWithExtract(instruction, stagehand)) {
-            return { passed: true, checkType: "semantic", expected: instruction, actual: "Confirmed by extract() (b-test false negative mitigated)" };
-          }
-        }
-      }
-
-      if (checkType === "semantic" && attempt < MAX_RETRIES) {
-        await delay(RETRY_DELAY);
-        continue;
-      }
-
-      if (checkType === "semantic") {
-        return { ...result, actual: await getCheckErrorContext(page, instruction, attempt) };
-      }
-      return result;
-    } catch (error) {
-      const rawError = error instanceof Error ? error : new Error(String(error));
-      if (isRetryableError(rawError.message) && attempt < MAX_RETRIES) {
-        await delay(RETRY_DELAY);
-        continue;
-      }
-      return {
-        passed: false,
-        checkType,
-        expected: instruction,
-        actual: await getCheckErrorContext(page, instruction, attempt),
-      };
-    }
-  }
-
-  return {
-    passed: false,
-    checkType,
-    expected: instruction,
-    actual: await getCheckErrorContext(page, instruction, lastAttempt),
-  };
+      },
+      failed: false,
+    };
+  } catch { return { stepResult: null, failed: false }; }
 }
