@@ -6,9 +6,6 @@ import {
 } from "../continuous-orchestrator";
 import { topologicalSort } from "../../shared/topological-sort";
 
-// ============================================================================
-// HELPERS — build test behavior graphs
-// ============================================================================
 
 function makeBehavior(
   id: string,
@@ -27,9 +24,7 @@ function toBehaviorMap(behaviors: HarborBehavior[]): Map<string, HarborBehavior>
   return new Map(behaviors.map((b) => [b.id, b]));
 }
 
-// ============================================================================
 // topologicalSort
-// ============================================================================
 
 describe("topologicalSort", () => {
   it("should return a single behavior with no dependencies", () => {
@@ -136,9 +131,7 @@ describe("topologicalSort", () => {
   });
 });
 
-// ============================================================================
 // partitionBehaviors
-// ============================================================================
 
 describe("partitionBehaviors", () => {
   it("should separate auth from non-auth behaviors", () => {
@@ -209,9 +202,7 @@ describe("partitionBehaviors", () => {
   });
 });
 
-// ============================================================================
 // buildTransitiveDependentsMap
-// ============================================================================
 
 describe("buildTransitiveDependentsMap", () => {
   it("should compute direct dependents for a simple chain", () => {

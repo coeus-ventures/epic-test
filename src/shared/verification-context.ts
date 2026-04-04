@@ -1,7 +1,3 @@
-// ============================================================================
-// VERIFICATION CONTEXT — tracks behavior results for dependency awareness
-// ============================================================================
-
 import type { BehaviorContext } from "./types";
 
 export class VerificationContext {

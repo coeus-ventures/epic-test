@@ -1,7 +1,3 @@
-// ============================================================================
-// AUTH BEHAVIOR IDENTIFICATION & FLOW
-// ============================================================================
-
 import type { HarborBehavior, BehaviorContext, BehaviorRunner, ExampleResult } from "./types";
 import { VerificationContext } from "./verification-context";
 import { CredentialTracker, processStepsWithCredentials } from "./credential-tracker";
@@ -27,9 +23,6 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: st
   ]);
 }
 
-// ============================================================================
-// MAIN ORCHESTRATOR
-// ============================================================================
 
 /**
  * Run auth behaviors in sequence: Sign Up → Sign Out → Sign In.
@@ -71,9 +64,6 @@ export async function runAuthBehaviorsSequence(
   return results;
 }
 
-// ============================================================================
-// PER-BEHAVIOR EXECUTION
-// ============================================================================
 
 /** Decide whether to skip, fail-fast, or run a single auth behavior. */
 async function runSingleAuthBehavior(
@@ -151,9 +141,6 @@ async function runAuthBehaviorScenarios(
   };
 }
 
-// ============================================================================
-// RESULT BUILDERS
-// ============================================================================
 
 function captureCredentialsAfterSignUp(
   behavior: HarborBehavior,

@@ -15,7 +15,6 @@ import {
   executeCheckWithRetry,
 } from "../check-helpers";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function makeStagehand(extractResult: Record<string, unknown>) {
   return {
@@ -49,7 +48,6 @@ function makePage(bodyText: string = "") {
   };
 }
 
-// ─── EXTRACT_EVALUATION_PROMPT ───────────────────────────────────────────────
 
 describe("EXTRACT_EVALUATION_PROMPT", () => {
   it("does not contain 'Be generous'", () => {
@@ -61,7 +59,6 @@ describe("EXTRACT_EVALUATION_PROMPT", () => {
   });
 });
 
-// ─── doubleCheckWithExtract ───────────────────────────────────────────────────
 
 describe("doubleCheckWithExtract", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -103,7 +100,6 @@ describe("doubleCheckWithExtract", () => {
   });
 });
 
-// ─── tryDeterministicCheck ───────────────────────────────────────────────────
 
 describe("tryDeterministicCheck", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -133,7 +129,6 @@ describe("tryDeterministicCheck", () => {
   });
 });
 
-// ─── executeCheckWithRetry concordance gates ──────────────────────────────────
 
 describe("executeCheckWithRetry concordance gates", () => {
   beforeEach(() => vi.clearAllMocks());

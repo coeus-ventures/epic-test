@@ -1,7 +1,3 @@
-// ============================================================================
-// ACT HELPERS — unit tests for resilience helpers
-// ============================================================================
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   actWithRetry,
@@ -15,9 +11,6 @@ import {
 import type { Page } from 'playwright';
 import type { Stagehand } from '@browserbasehq/stagehand';
 
-// ============================================================================
-// HELPERS
-// ============================================================================
 
 function makePage(evaluateResult: unknown = false): Page {
   return {
@@ -32,9 +25,7 @@ function makeStagehand(actImpl?: () => Promise<void>): Stagehand {
   } as unknown as Stagehand;
 }
 
-// ============================================================================
 // delay
-// ============================================================================
 
 describe('delay', () => {
   it('should resolve after the given milliseconds', async () => {
@@ -44,9 +35,7 @@ describe('delay', () => {
   });
 });
 
-// ============================================================================
 // isRetryableError
-// ============================================================================
 
 describe('isRetryableError', () => {
   it('should match schema errors', () => {
@@ -68,9 +57,7 @@ describe('isRetryableError', () => {
   });
 });
 
-// ============================================================================
 // actWithRetry
-// ============================================================================
 
 describe('actWithRetry', () => {
   it('should succeed on the first attempt without retrying', async () => {
@@ -122,9 +109,7 @@ describe('actWithRetry', () => {
   });
 });
 
-// ============================================================================
 // dismissStaleModal
-// ============================================================================
 
 describe('dismissStaleModal', () => {
   it('should press Escape and return true when a modal is detected', async () => {
@@ -150,9 +135,7 @@ describe('dismissStaleModal', () => {
   });
 });
 
-// ============================================================================
 // tryDOMClick
-// ============================================================================
 
 describe('tryDOMClick', () => {
   it('should return false when instruction has no click-type keyword', async () => {
@@ -202,9 +185,7 @@ describe('tryDOMClick', () => {
   });
 });
 
-// ============================================================================
 // tryFillRequiredInputs
-// ============================================================================
 
 describe('tryFillRequiredInputs', () => {
   it('should return the count of fields filled from page.evaluate', async () => {
@@ -227,9 +208,7 @@ describe('tryFillRequiredInputs', () => {
   });
 });
 
-// ============================================================================
 // isSubmitAction
-// ============================================================================
 
 describe('isSubmitAction', () => {
   it('should match "Click the Submit button" patterns', () => {

@@ -1,7 +1,3 @@
-// ============================================================================
-// REWARD & SUMMARY
-// ============================================================================
-
 import type { BehaviorContext, VerificationSummary } from "./types";
 
 export function calculateReward(results: BehaviorContext[]): number {

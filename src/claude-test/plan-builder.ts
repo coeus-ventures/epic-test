@@ -40,7 +40,6 @@ export function topologicalSort(behaviors: HarborBehavior[]): HarborBehavior[] {
   return [...auth, ...sortedNonAuth];
 }
 
-// ─── Credential Rewriting ────────────────────────────────────────────
 
 /**
  * Rewrite sign-up steps to use the uniquified email.
@@ -69,7 +68,6 @@ function rewriteBehaviorCredentials(
   };
 }
 
-// ─── Plan Generation ─────────────────────────────────────────────────
 
 function extractEmailFromSteps(steps: { type: string; instruction: string }[]): string | null {
   const pattern = /[Tt]ype\s+"([^"]+@[^"]+)"\s+into\s+(?:the\s+)?email/;

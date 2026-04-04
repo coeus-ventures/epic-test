@@ -1,7 +1,3 @@
-// ============================================================================
-// GOAL BUILDER — converts spec steps into agent goal prompts
-// ============================================================================
-
 import type { SpecStep } from "../shared/types";
 
 /**

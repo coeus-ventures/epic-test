@@ -14,7 +14,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { evaluateActResult } from "../act-evaluator";
 import type { ActContext } from "../types";
 
-// ─── Minimal mocks ────────────────────────────────────────────────────────────
 
 function makeMockTester(diffSummary = "No changes detected") {
   return {
@@ -38,7 +37,6 @@ function makeCtx(overrides: Partial<ActContext> = {}): ActContext {
   };
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("evaluateActResult", () => {
   beforeEach(() => {

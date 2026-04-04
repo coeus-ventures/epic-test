@@ -1,7 +1,3 @@
-// ============================================================================
-// HELP-DESK-APP FIXTURE — comprehensive parsing + v4 helper integration tests
-// ============================================================================
-
 import { describe, it, expect } from "vitest";
 import { readFile } from "fs/promises";
 import path from "path";
@@ -28,9 +24,7 @@ async function loadBehaviors() {
   return parseHarborBehaviorsWithDependencies(content);
 }
 
-// ============================================================================
 // 1. PARSING — All 12 behaviors parsed correctly
-// ============================================================================
 
 describe("help-desk-app — parsing", () => {
   it("should parse all 12 behaviors from instruction.md", async () => {
@@ -128,9 +122,7 @@ describe("help-desk-app — parsing", () => {
   });
 });
 
-// ============================================================================
 // 2. PAGE PATHS — Behaviors mapped to correct routes
-// ============================================================================
 
 describe("help-desk-app — page paths", () => {
   it("should map auth behaviors to their page paths", async () => {
@@ -161,9 +153,7 @@ describe("help-desk-app — page paths", () => {
   });
 });
 
-// ============================================================================
 // 3. DEPENDENCIES — Correct dependency declarations
-// ============================================================================
 
 describe("help-desk-app — dependencies", () => {
   it("should parse Sign Up with no dependencies", async () => {
@@ -209,9 +199,7 @@ describe("help-desk-app — dependencies", () => {
   });
 });
 
-// ============================================================================
 // 4. DEPENDENCY CHAINS — buildDependencyChain produces correct execution order
-// ============================================================================
 
 describe("help-desk-app — dependency chains", () => {
   it("should build trivial chain for Sign Up (no deps)", async () => {
@@ -258,9 +246,7 @@ describe("help-desk-app — dependency chains", () => {
   });
 });
 
-// ============================================================================
 // 5. STEP CLASSIFICATION — Check steps classified correctly
-// ============================================================================
 
 describe("help-desk-app — check classification", () => {
   it("should classify text-visibility checks as semantic", async () => {
@@ -287,9 +273,7 @@ describe("help-desk-app — check classification", () => {
   });
 });
 
-// ============================================================================
 // 6. V4 INSTRUCTION DETECTION — helpers match help-desk-app patterns
-// ============================================================================
 
 describe("help-desk-app — navigation detection helpers", () => {
   it("should detect navigate-to actions in Sign Up / Sign In", async () => {
@@ -303,9 +287,7 @@ describe("help-desk-app — navigation detection helpers", () => {
   });
 });
 
-// ============================================================================
 // 7. CREDENTIAL TRACKING — Sign Up steps capture credentials
-// ============================================================================
 
 describe("help-desk-app — credential tracking", () => {
   it("should capture email and password from Sign Up steps", async () => {

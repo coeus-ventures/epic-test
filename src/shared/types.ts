@@ -1,7 +1,3 @@
-// ============================================================================
-// SHARED TYPES — cross-cutting type definitions used by all modules
-// ============================================================================
-
 /**
  * A single step in a specification
  */

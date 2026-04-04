@@ -1,7 +1,3 @@
-// ============================================================================
-// PARSING
-// ============================================================================
-
 import { readFile } from "fs/promises";
 import type { SpecStep, SpecExample, TestableSpec, HarborBehavior } from "./types";
 import { classifyCheck } from "./classify";

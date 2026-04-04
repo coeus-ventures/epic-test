@@ -1,7 +1,3 @@
-// ============================================================================
-// BASE STAGEHAND RUNNER — shared initialization, session management, and cleanup
-// ============================================================================
-
 import type { Page } from "playwright";
 import type { Stagehand } from "@browserbasehq/stagehand";
 import type { SpecExample, ExampleResult, BehaviorRunner } from "./types";

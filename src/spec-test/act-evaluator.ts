@@ -1,6 +1,3 @@
-// ============================================================================
-// ACT EVALUATOR — post-act three-way judgment (issue 012)
-// ============================================================================
 //
 // Determines whether an adaptive act loop iteration achieved its goal:
 //   complete   — goal achieved, move to next step

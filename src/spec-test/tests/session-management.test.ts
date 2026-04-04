@@ -14,7 +14,6 @@ import {
   clearFormFields,
 } from "../session-management";
 
-// ─── safeWaitForLoadState ────────────────────────────────────────────────
 
 function makeMockPage(behavior: "success" | "timeout" | "other-error") {
   return {
@@ -52,7 +51,6 @@ describe("safeWaitForLoadState", () => {
   });
 });
 
-// ─── urlsMatch ───────────────────────────────────────────────────────────
 
 describe("urlsMatch", () => {
   it("matches identical URLs", () => {
@@ -73,7 +71,6 @@ describe("urlsMatch", () => {
   });
 });
 
-// ─── isSignInRedirect ────────────────────────────────────────────────────
 
 describe("isSignInRedirect", () => {
   it("returns true for /sign-in redirect", () => {
@@ -101,7 +98,6 @@ describe("isSignInRedirect", () => {
   });
 });
 
-// ─── detectPort ──────────────────────────────────────────────────────────
 
 describe("detectPort", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -140,7 +136,6 @@ describe("detectPort", () => {
   });
 });
 
-// ─── resetSession ────────────────────────────────────────────────────────
 
 describe("resetSession", () => {
   it("navigates to about:blank, then baseUrl, clears storage, and reloads", async () => {
@@ -162,7 +157,6 @@ describe("resetSession", () => {
   });
 });
 
-// ─── navigateToPagePath ──────────────────────────────────────────────────
 
 describe("navigateToPagePath", () => {
   it("skips navigation when already on target URL", async () => {
@@ -238,7 +232,6 @@ describe("navigateToPagePath", () => {
   });
 });
 
-// ─── clearFormFields ─────────────────────────────────────────────────────
 
 describe("clearFormFields", () => {
   it("calls page.evaluate to clear fields programmatically", async () => {

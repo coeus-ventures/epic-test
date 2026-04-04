@@ -1,7 +1,3 @@
-// ============================================================================
-// VERIFIER — post-agent outcome verification using stagehand.extract()
-// ============================================================================
-
 import { z } from "zod";
 import type { Page } from "playwright";
 import type { Stagehand } from "@browserbasehq/stagehand";

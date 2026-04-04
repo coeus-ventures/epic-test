@@ -1,7 +1,3 @@
-// ============================================================================
-// TOP-LEVEL VERIFICATION ORCHESTRATOR
-// ============================================================================
-
 import { readFile } from "fs/promises";
 import type { BehaviorContext, BehaviorRunner, VerificationSummary } from "./types";
 import { parseHarborBehaviorsWithDependencies } from "./parsing";

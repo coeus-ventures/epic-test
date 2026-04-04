@@ -1,7 +1,3 @@
-// ============================================================================
-// SPEC TEST RUNNER — the main class for executing behavior specs
-// ============================================================================
-
 import { existsSync, rmSync } from "fs";
 import path from "path";
 import type { Page } from "playwright";

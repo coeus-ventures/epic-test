@@ -16,7 +16,6 @@ import * as actHelpers from "../act-helpers";
 vi.mock("../act-evaluator");
 vi.mock("../act-helpers");
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function makeRunner() {
   const runner = new SpecTestRunner({ baseUrl: "http://localhost:3000" });
@@ -44,7 +43,6 @@ function makeRunner() {
   return { runner, mockStagehand, mockTester, mockPage };
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("executeAdaptiveAct", () => {
   beforeEach(() => {

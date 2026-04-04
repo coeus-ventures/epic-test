@@ -1,7 +1,3 @@
-// ============================================================================
-// AGENT TEST RUNNER — goal-driven browser verification using Stagehand Agent API
-// ============================================================================
-
 import type { Page } from "playwright";
 import type {
   Stagehand,
