@@ -17,6 +17,7 @@ import {
   isAuthBehavior,
   withTimeout,
   DEFAULT_BEHAVIOR_TIMEOUT_MS,
+  AUTH_ORDER,
 } from "../shared/auth-orchestrator";
 
 // ── MAIN ORCHESTRATOR ──────────────────────────────────────────────────
@@ -351,8 +352,6 @@ export function topologicalSort(
 
   return sorted;
 }
-
-const AUTH_ORDER = ["sign-up", "sign-out", "sign-in"];
 
 /** Split behaviors into auth (hardcoded order) and non-auth (preserve topological order). */
 export function partitionBehaviors(sorted: HarborBehavior[]): {

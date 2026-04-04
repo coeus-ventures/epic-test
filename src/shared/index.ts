@@ -22,7 +22,7 @@ export type {
 } from "./types";
 
 // --- Credential Tracker ---
-export { CredentialTracker, processStepsWithCredentials } from "./credential-tracker";
+export { CredentialTracker, processStepsWithCredentials, TYPE_INTO_FIELD_PATTERN, TYPE_VALUE_PATTERN } from "./credential-tracker";
 
 // --- Dependency Chain ---
 export { buildDependencyChain } from "./dependency-chain";
@@ -37,7 +37,7 @@ export { calculateReward, aggregateResults, generateSummary, createVerificationS
 export { detectPort, resetSession, navigateToPagePath, clearFormFields, urlsMatch, isSignInRedirect, recoverAuth, safeWaitForLoadState } from "./session-management";
 
 // --- Auth Orchestrator ---
-export { isAuthBehavior, runAuthBehaviorsSequence, withTimeout, DEFAULT_BEHAVIOR_TIMEOUT_MS } from "./auth-orchestrator";
+export { isAuthBehavior, runAuthBehaviorsSequence, withTimeout, DEFAULT_BEHAVIOR_TIMEOUT_MS, AUTH_ORDER } from "./auth-orchestrator";
 
 // --- Base Runner ---
 export { BaseStagehandRunner } from "./base-runner";

@@ -1,8 +1,10 @@
-// ============================================================================
-// CREDENTIAL TRACKER — captures Sign Up credentials for reuse
-// ============================================================================
-
 import type { HarborBehavior, SpecStep } from "./types";
+
+/** Matches "Type 'value' into the field" — captures value and field descriptor. */
+export const TYPE_INTO_FIELD_PATTERN = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
+
+/** Matches "Type 'value'" — captures value only. Used for replacement. */
+export const TYPE_VALUE_PATTERN = /Type\s+["']([^"']+)["']/i;
 
 export class CredentialTracker {
   private credentials: { email: string | null; password: string | null };
@@ -24,8 +26,7 @@ export class CredentialTracker {
 
   /** Capture credentials from a Type step instruction. */
   captureFromStep(instruction: string): void {
-    const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
-    const match = instruction.match(typePattern);
+    const match = instruction.match(TYPE_INTO_FIELD_PATTERN);
     if (!match) return;
 
     const value = match[1].trim();
@@ -40,8 +41,7 @@ export class CredentialTracker {
 
   /** Inject captured credentials into a step instruction. */
   injectIntoStep(instruction: string): string {
-    const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
-    const match = instruction.match(typePattern);
+    const match = instruction.match(TYPE_INTO_FIELD_PATTERN);
     if (!match) return instruction;
 
     const fieldDescriptor = match[2].toLowerCase();
@@ -49,14 +49,14 @@ export class CredentialTracker {
 
     if (fieldDescriptor.includes('email') && this.credentials.email) {
       return instruction.replace(
-        /Type\s+["']([^"']+)["']/i,
+        TYPE_VALUE_PATTERN,
         `Type ${originalQuote}${this.credentials.email}${originalQuote}`
       );
     }
 
     if (fieldDescriptor.includes('password') && this.credentials.password) {
       return instruction.replace(
-        /Type\s+["']([^"']+)["']/i,
+        TYPE_VALUE_PATTERN,
         `Type ${originalQuote}${this.credentials.password}${originalQuote}`
       );
     }
@@ -77,10 +77,6 @@ export class CredentialTracker {
   }
 }
 
-// ============================================================================
-// CREDENTIAL PROCESSING FOR STEPS
-// ============================================================================
-
 /**
  * Process steps for a behavior, handling credential uniquification and injection.
  *
@@ -99,10 +95,9 @@ export function processStepsWithCredentials(
 
   // Sign Up: uniquify email
   if (behaviorId.includes('sign-up') || behaviorId.includes('signup')) {
-    const typePattern = /Type\s+["']([^"']+)["']\s+into\s+(?:the\s+)?(.+)/i;
     return steps.map(step => {
       if (step.type !== 'Act') return step;
-      const match = step.instruction.match(typePattern);
+      const match = step.instruction.match(TYPE_INTO_FIELD_PATTERN);
       if (!match) return step;
       if (match[2].toLowerCase().includes('email')) {
         const uniqueEmail = credentialTracker.uniquifyEmail(match[1]);
@@ -110,7 +105,7 @@ export function processStepsWithCredentials(
         return {
           ...step,
           instruction: step.instruction.replace(
-            /Type\s+["']([^"']+)["']/i,
+            TYPE_VALUE_PATTERN,
             `Type ${quote}${uniqueEmail}${quote}`
           ),
         };

@@ -10,7 +10,7 @@ import { CredentialTracker, processStepsWithCredentials } from "./credential-tra
 const AUTH_PATTERNS = ['sign-up', 'signup', 'sign-in', 'signin', 'sign-out', 'signout'];
 
 /** Auth behaviors execute in this order: create account → log out → log back in */
-const AUTH_ORDER = ['sign-up', 'sign-out', 'sign-in'];
+export const AUTH_ORDER = ['sign-up', 'sign-out', 'sign-in'] as const;
 
 export function isAuthBehavior(behaviorId: string): boolean {
   const lower = behaviorId.toLowerCase();
