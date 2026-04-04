@@ -1,7 +1,6 @@
 import type { Page } from "playwright";
 import type {
   Stagehand,
-  AgentConfig,
   AgentExecuteOptions,
 } from "@browserbasehq/stagehand";
 
@@ -123,15 +122,12 @@ export class AgentTestRunner extends BaseStagehandRunner {
       const mode = this.config.agentMode ?? "cua";
       const maxSteps = this.config.maxSteps ?? DEFAULT_MAX_STEPS;
 
-      const agentConfig: AgentConfig = { mode };
-      if (this.config.agentModel) {
-        agentConfig.model = this.config.agentModel;
-      }
-      if (this.config.agentSystemPrompt) {
-        agentConfig.systemPrompt = this.config.agentSystemPrompt;
-      }
-
-      const agent = stagehand.agent(agentConfig);
+      const agent = stagehand.agent({
+        mode,
+        stream: false as const,
+        ...(this.config.agentModel && { model: this.config.agentModel }),
+        ...(this.config.agentSystemPrompt && { systemPrompt: this.config.agentSystemPrompt }),
+      });
 
       const executeOptions: AgentExecuteOptions = {
         instruction: goal,
