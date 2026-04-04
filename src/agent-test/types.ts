@@ -2,7 +2,7 @@
 // AGENT TEST TYPES — configuration and result types for agent-based testing
 // ============================================================================
 
-import type { SpecTestConfig } from "../spec-test";
+import type { SpecTestConfig } from "../spec-test/types";
 import type { AgentToolMode, AgentAction } from "@browserbasehq/stagehand";
 
 /** Default max steps per agent.execute() call */

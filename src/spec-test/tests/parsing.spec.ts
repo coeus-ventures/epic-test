@@ -86,12 +86,12 @@ describe("parseSteps", () => {
     const steps = parseSteps(content);
 
     expect(steps).toHaveLength(5);
-    expect(steps[0].type).toBe("act");
-    expect(steps[1].type).toBe("act");
-    expect(steps[2].type).toBe("check");
+    expect(steps[0].type).toBe("Act");
+    expect(steps[1].type).toBe("Act");
+    expect(steps[2].type).toBe("Check");
     expect(steps[2].checkType).toBe("semantic");
-    expect(steps[3].type).toBe("act");
-    expect(steps[4].type).toBe("check");
+    expect(steps[3].type).toBe("Act");
+    expect(steps[4].type).toBe("Check");
     expect(steps[4].checkType).toBe("deterministic");
   });
 });

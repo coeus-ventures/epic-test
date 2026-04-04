@@ -2,7 +2,7 @@
 // GOAL BUILDER — converts spec steps into agent goal prompts
 // ============================================================================
 
-import type { SpecStep } from "../spec-test";
+import type { SpecStep } from "../shared/types";
 
 /**
  * Build a goal prompt for the Stagehand agent from a list of spec steps.
