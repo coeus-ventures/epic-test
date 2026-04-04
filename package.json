@@ -22,6 +22,10 @@
     "./db-test": {
       "import": "./dist/db-test/index.js",
       "types": "./dist/db-test/index.d.ts"
+    },
+    "./claude-test": {
+      "import": "./dist/claude-test/index.js",
+      "types": "./dist/claude-test/index.d.ts"
     }
   },
   "files": [

@@ -49,6 +49,15 @@ function makeRunner() {
 describe("executeAdaptiveAct", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // actWithRetry is a thin wrapper — forward to stagehand.act so existing
+    // assertions on mockStagehand.act continue to work.
+    vi.mocked(actHelpers.actWithRetry).mockImplementation(
+      async (stagehand: any, instruction: string) => { await stagehand.act(instruction); },
+    );
+    // dismissStaleModal / tryDOMClick / tryFillRequiredInputs — safe no-ops by default
+    vi.mocked(actHelpers.dismissStaleModal).mockResolvedValue(false);
+    vi.mocked(actHelpers.tryDOMClick).mockResolvedValue(false);
+    vi.mocked(actHelpers.tryFillRequiredInputs).mockResolvedValue(0);
   });
 
   it("completes in one iteration without calling observe (iteration 0 uses original goal)", async () => {
