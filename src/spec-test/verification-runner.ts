@@ -1,8 +1,4 @@
-// ============================================================================
-// BEHAVIOR VERIFICATION — chain execution with dependency tracking
-// ============================================================================
-
-import type { HarborBehavior, BehaviorContext, ExampleResult, BehaviorRunner } from "./types";
+import type { HarborBehavior, BehaviorContext, SpecExample, ExampleResult, BehaviorRunner } from "./types";
 import { VerificationContext } from "./verification-context";
 import { CredentialTracker, processStepsWithCredentials } from "./credential-tracker";
 import { buildDependencyChain } from "./dependency-chain";
@@ -10,12 +6,9 @@ import { buildDependencyChain } from "./dependency-chain";
 /**
  * Verify a behavior along with its full dependency chain.
  *
- * Architecture (post-spec-update):
- * - Each behavior's steps start on its own page (no sign-in preamble)
- * - The chain is: Sign Up (creates account + logs in) → target behavior
- * - Only the first chain step (Sign Up) clears browser state
- * - Subsequent steps preserve localStorage/cookies via soft navigation
- * - Parameterized routes (e.g., /surveys/:id) resolve to parent path (/surveys)
+ * Chain: Sign Up (creates account + logs in) → ... → target behavior.
+ * Only the first chain step clears browser state; subsequent steps preserve
+ * localStorage/cookies via soft navigation.
  */
 export async function verifyBehaviorWithDependencies(
   targetBehavior: HarborBehavior,
@@ -24,124 +17,90 @@ export async function verifyBehaviorWithDependencies(
   credentialTracker: CredentialTracker,
   runner: BehaviorRunner
 ): Promise<BehaviorContext> {
+  const skipCheck = context.shouldSkip(targetBehavior.dependencies.map(d => d.behaviorId));
+  if (skipCheck.skip) return skipResult(targetBehavior, skipCheck.reason!);
+
+  const chain = buildDependencyChain(targetBehavior.id, allBehaviors);
   const startTime = Date.now();
 
-  // Skip if any dependency already failed
-  const skipCheck = context.shouldSkip(targetBehavior.dependencies.map(d => d.behaviorId));
-  if (skipCheck.skip) {
-    return {
-      behaviorId: targetBehavior.id,
-      behaviorName: targetBehavior.title,
-      status: 'dependency_failed',
-      failedDependency: skipCheck.reason,
-      duration: 0,
-    };
+  let isFirstInChain = true;
+  for (const { behavior, scenarioName } of chain) {
+    const example = resolveExample(behavior, scenarioName);
+    if (!example) return failResult(targetBehavior, `No examples found for behavior: ${behavior.title}`, startTime);
+
+    const result = await runChainStep(behavior, example, isFirstInChain, credentialTracker, runner);
+    isFirstInChain = false;
+
+    if (result instanceof Error) return crashResult(targetBehavior, behavior, result.message, startTime);
+    captureSignUpCredentials(behavior, example, credentialTracker);
+    if (!result.success) return stepFailureResult(targetBehavior, behavior, result, startTime);
   }
 
-  // Build full dependency chain (Sign Up → ... → target)
-  const chain = buildDependencyChain(targetBehavior.id, allBehaviors);
+  return passResult(targetBehavior, startTime);
+}
 
-  for (let chainIndex = 0; chainIndex < chain.length; chainIndex++) {
-    const { behavior, scenarioName } = chain[chainIndex];
-    const isFirstInChain = chainIndex === 0;
+function resolveExample(behavior: HarborBehavior, scenarioName?: string): SpecExample | undefined {
+  if (!scenarioName) return behavior.examples[0];
+  return behavior.examples.find(e => e.name === scenarioName) ?? behavior.examples[0];
+}
 
-    // Pick scenario
-    const example = scenarioName
-      ? behavior.examples.find(e => e.name === scenarioName) ?? behavior.examples[0]
-      : behavior.examples[0];
+async function runChainStep(
+  behavior: HarborBehavior,
+  example: SpecExample,
+  isFirstInChain: boolean,
+  credentialTracker: CredentialTracker,
+  runner: BehaviorRunner,
+): Promise<ExampleResult | Error> {
+  const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker, example.name);
+  const navigateToPath = (isFirstInChain || !behavior.pagePath) ? undefined : behavior.pagePath;
+  const creds = credentialTracker.getCredentials();
 
-    if (!example) {
-      return {
-        behaviorId: targetBehavior.id,
-        behaviorName: targetBehavior.title,
-        status: 'fail',
-        error: `No examples found for behavior: ${behavior.title}`,
-        duration: Date.now() - startTime,
-      };
-    }
+  console.log(`Chain: ${behavior.id} — ${processedSteps.length} steps, email=${creds.email ?? '(none)'}${navigateToPath ? `, navigateTo=${navigateToPath}` : ''}`);
 
-    // Process steps with credential handling (pass scenario name for injection skip)
-    const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker, example.name);
-
-    const creds = credentialTracker.getCredentials();
-
-    // Navigation strategy for dependency chains:
-    // - First step (Sign Up): clears session, navigates to baseUrl via resetSession()
-    // - All subsequent steps: navigate to their pagePath so they start on the right page.
-    //   For parameterized routes (e.g., /surveys/:id), navigateToPagePath() resolves
-    //   to the parent path (e.g., /surveys) — the behavior's steps handle instance selection.
-    const skipNavigation = isFirstInChain || !behavior.pagePath;
-    const navigateToPath = skipNavigation ? undefined : behavior.pagePath;
-
-    console.log(`Chain [${chainIndex}/${chain.length - 1}] ${behavior.id}: ${processedSteps.length} steps, email=${creds.email ?? '(none)'}${navigateToPath ? `, navigateTo=${navigateToPath}` : ''}`);
-
-    // Execute: only clear session for the first chain step.
-    // For subsequent steps, navigate to the behavior's page path if available.
-    const exampleToRun = { ...example, steps: processedSteps };
-    let result: ExampleResult;
-    try {
-      result = await runner.runExample(exampleToRun, {
-        clearSession: isFirstInChain,
-        navigateToPath,
-        credentials: credentialTracker.getCredentials(),
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      if (behavior.id !== targetBehavior.id) {
-        return {
-          behaviorId: targetBehavior.id,
-          behaviorName: targetBehavior.title,
-          status: 'dependency_failed',
-          failedDependency: behavior.title,
-          error: `Dependency "${behavior.title}" crashed: ${errorMessage}`,
-          duration: Date.now() - startTime,
-        };
-      }
-      return {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: 'fail',
-        error: `Runner crash: ${errorMessage}`,
-        duration: Date.now() - startTime,
-      };
-    }
-
-    // Capture credentials after Sign Up (from processed steps to get uniquified email)
-    if (behavior.id.includes('sign-up') || behavior.id.includes('signup')) {
-      processedSteps
-        .filter(s => s.type === 'Act')
-        .forEach(s => credentialTracker.captureFromStep(s.instruction));
-    }
-
-    // Handle failure
-    if (!result.success) {
-      if (behavior.id !== targetBehavior.id) {
-        const depError = result.failedAt?.context.error;
-        return {
-          behaviorId: targetBehavior.id,
-          behaviorName: targetBehavior.title,
-          status: 'dependency_failed',
-          failedDependency: behavior.title,
-          error: depError
-            ? `Dependency "${behavior.title}" failed: ${depError}`
-            : `Dependency "${behavior.title}" failed`,
-          duration: Date.now() - startTime,
-        };
-      }
-      return {
-        behaviorId: targetBehavior.id,
-        behaviorName: targetBehavior.title,
-        status: 'fail',
-        error: result.failedAt?.context.error,
-        duration: Date.now() - startTime,
-      };
-    }
+  try {
+    return await runner.runExample({ ...example, steps: processedSteps }, {
+      clearSession: isFirstInChain,
+      navigateToPath,
+      credentials: creds,
+    });
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
   }
+}
 
-  return {
-    behaviorId: targetBehavior.id,
-    behaviorName: targetBehavior.title,
-    status: 'pass',
-    duration: Date.now() - startTime,
-  };
+function captureSignUpCredentials(behavior: HarborBehavior, example: SpecExample, credentialTracker: CredentialTracker): void {
+  const isSignUp = behavior.id.includes('sign-up') || behavior.id.includes('signup');
+  if (!isSignUp) return;
+
+  example.steps
+    .filter(s => s.type === 'Act')
+    .forEach(s => credentialTracker.captureFromStep(s.instruction));
+}
+
+function skipResult(target: HarborBehavior, reason: string): BehaviorContext {
+  return { behaviorId: target.id, behaviorName: target.title, status: 'dependency_failed', failedDependency: reason, duration: 0 };
+}
+
+function passResult(target: HarborBehavior, startTime: number): BehaviorContext {
+  return { behaviorId: target.id, behaviorName: target.title, status: 'pass', duration: Date.now() - startTime };
+}
+
+function failResult(target: HarborBehavior, error: string | undefined, startTime: number): BehaviorContext {
+  return { behaviorId: target.id, behaviorName: target.title, status: 'fail', error, duration: Date.now() - startTime };
+}
+
+function crashResult(target: HarborBehavior, dep: HarborBehavior, message: string, startTime: number): BehaviorContext {
+  if (dep.id === target.id) return failResult(target, `Runner crash: ${message}`, startTime);
+  return depFailResult(target, dep.title, `Dependency "${dep.title}" crashed: ${message}`, startTime);
+}
+
+function stepFailureResult(target: HarborBehavior, dep: HarborBehavior, result: ExampleResult, startTime: number): BehaviorContext {
+  if (dep.id === target.id) return failResult(target, result.failedAt?.context.error, startTime);
+  const depError = result.failedAt?.context.error;
+  const message = depError ? `Dependency "${dep.title}" failed: ${depError}` : `Dependency "${dep.title}" failed`;
+  return depFailResult(target, dep.title, message, startTime);
+}
+
+function depFailResult(target: HarborBehavior, depTitle: string, error: string, startTime: number): BehaviorContext {
+  return { behaviorId: target.id, behaviorName: target.title, status: 'dependency_failed', failedDependency: depTitle, error, duration: Date.now() - startTime };
 }
