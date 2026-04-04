@@ -1,9 +1,11 @@
-// ============================================================================
-// SESSION MANAGEMENT — browser session, navigation, auth recovery, port detection
-// ============================================================================
-
 import type { Page } from "playwright";
 import type { Stagehand } from "@browserbasehq/stagehand";
+
+// Apps with persistent connections (HMR, WebSocket) never reach networkidle
+const NETWORKIDLE_TIMEOUT_MS = 5000;
+const CONFIGURED_PORT_TIMEOUT_MS = 5000;
+const ALT_PORT_TIMEOUT_MS = 3000;
+const ALTERNATIVE_PORTS = [3000, 5173, 8080, 4200, 3001];
 
 /**
  * Wait for networkidle with a short timeout, swallowing timeouts silently.
@@ -11,7 +13,7 @@ import type { Stagehand } from "@browserbasehq/stagehand";
  * networkidle — a bare waitForLoadState call would crash the entire run.
  * Page content is already loaded when this happens, so it is safe to continue.
  */
-export async function safeWaitForLoadState(page: Page, timeout = 5000): Promise<void> {
+export async function safeWaitForLoadState(page: Page, timeout = NETWORKIDLE_TIMEOUT_MS): Promise<void> {
   try {
     await page.waitForLoadState('networkidle', { timeout });
   } catch {
@@ -40,22 +42,20 @@ export async function detectPort(page: Page, baseUrl: string): Promise<string> {
   const url = new URL(baseUrl);
   const baseHost = url.hostname;
   const expectedPort = url.port || '3000';
-  const alternativePorts = [3000, 5173, 8080, 4200, 3001];
-
-  // 1. Try configured port first
+  // Try configured port first
   try {
-    const response = await page.goto(`http://${baseHost}:${expectedPort}`, { timeout: 5000 });
+    const response = await page.goto(`http://${baseHost}:${expectedPort}`, { timeout: CONFIGURED_PORT_TIMEOUT_MS });
     if (response?.ok()) {
       console.log(`[detectPort] App responding on configured port ${expectedPort}`);
       return baseUrl;
     }
   } catch { /* configured port failed */ }
 
-  // 2. Probe alternative ports
-  for (const port of alternativePorts) {
+  // Probe alternative ports
+  for (const port of ALTERNATIVE_PORTS) {
     if (String(port) === expectedPort) continue;
     try {
-      const response = await page.goto(`http://${baseHost}:${port}`, { timeout: 3000 });
+      const response = await page.goto(`http://${baseHost}:${port}`, { timeout: ALT_PORT_TIMEOUT_MS });
       if (response?.ok()) {
         const newBase = `http://${baseHost}:${port}`;
         console.log(`[detectPort] App found on port ${port} (expected ${expectedPort}). Overriding baseUrl to ${newBase}.`);

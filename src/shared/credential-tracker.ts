@@ -6,14 +6,17 @@ export const TYPE_INTO_FIELD_PATTERN = /Type\s+["']([^"']+)["']\s+into\s+(?:the\
 /** Matches "Type 'value'" — captures value only. Used for replacement. */
 export const TYPE_VALUE_PATTERN = /Type\s+["']([^"']+)["']/i;
 
+// Random offset range so re-runs on the same database produce unique emails
+const EXECUTION_COUNTER_MIN = 100000;
+const EXECUTION_COUNTER_RANGE = 900000;
+
 export class CredentialTracker {
   private credentials: { email: string | null; password: string | null };
   private executionCounter: number;
 
   constructor() {
     this.credentials = { email: null, password: null };
-    // Random offset so re-runs on the same database produce unique emails
-    this.executionCounter = Math.floor(Math.random() * 900000) + 100000;
+    this.executionCounter = Math.floor(Math.random() * EXECUTION_COUNTER_RANGE) + EXECUTION_COUNTER_MIN;
   }
 
   /** Generate unique email variant to avoid duplicate registration. */

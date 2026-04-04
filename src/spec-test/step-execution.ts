@@ -7,6 +7,7 @@ export const MAX_RETRIES = 3;
 export const RETRY_DELAY = 1000;
 const ELEMENT_TEXT_PREVIEW = 50;
 const ERROR_CONTEXT_ELEMENT_LIMIT = 10;
+const INTERACTIVE_ELEMENT_LIMIT = 20;
 
 /** Execute an Act step using Stagehand. */
 export async function executeActStep(
@@ -191,12 +192,12 @@ async function executeSemanticCheck(
 }
 
 async function extractInteractiveElements(page: Page): Promise<FailureContext["availableElements"]> {
-  return page.evaluate((previewLen) => {
+  return page.evaluate((args) => {
     const elements = document.querySelectorAll("button, a, input, select, textarea");
-    return Array.from(elements).slice(0, 20).map(el => {
+    return Array.from(elements).slice(0, args.limit).map(el => {
       const tagName = el.tagName.toLowerCase();
       const type = tagName === "a" ? "link" : tagName;
-      const text = el.textContent?.trim().slice(0, previewLen) || "";
+      const text = el.textContent?.trim().slice(0, args.previewLen) || "";
 
       let selector = tagName;
       if (el.id) selector += `#${el.id}`;
@@ -216,7 +217,7 @@ async function extractInteractiveElements(page: Page): Promise<FailureContext["a
         ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
       };
     });
-  }, ELEMENT_TEXT_PREVIEW);
+  }, { limit: INTERACTIVE_ELEMENT_LIMIT, previewLen: ELEMENT_TEXT_PREVIEW });
 }
 
 async function getPageContext(page: Page): Promise<{ url: string; title: string }> {
