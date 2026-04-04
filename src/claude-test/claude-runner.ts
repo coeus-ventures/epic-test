@@ -5,7 +5,7 @@
  * exec `claude --print` → parse results CSV → output reward + results.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "fs";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
 import path from "path";
@@ -102,11 +102,31 @@ function executeClaudeCommand(
   claudeEnv: Record<string, string>,
 ): void {
   mkdirSync(RESULTS_DIR, { recursive: true });
+  if (existsSync(RESULTS_CSV_PATH)) unlinkSync(RESULTS_CSV_PATH);
+
   const command = buildClaudeCommand(config, opts);
   console.log(`Executing: ${command}`);
 
+  // Wrap in a bash script that monitors for results.csv and kills the claude process
+  // when it appears. The MCP browser child process keeps claude alive after it finishes,
+  // so we need to detect completion externally.
+  const wrapper = `
+    ${command} &
+    CLAUDE_PID=$!
+    while kill -0 $CLAUDE_PID 2>/dev/null; do
+      if [ -f "${RESULTS_CSV_PATH}" ]; then
+        sleep 5
+        kill $CLAUDE_PID 2>/dev/null
+        wait $CLAUDE_PID 2>/dev/null
+        exit 0
+      fi
+      sleep 3
+    done
+    wait $CLAUDE_PID 2>/dev/null
+  `;
+
   try {
-    execSync(command, {
+    execSync(wrapper, {
       env: { ...process.env, ...claudeEnv },
       stdio: "inherit",
       timeout: opts.timeoutSec * 1000,
@@ -114,7 +134,7 @@ function executeClaudeCommand(
     });
   } catch (err) {
     // Non-fatal — Claude may have written results before erroring
-    console.log(`Claude command exited with error: ${err instanceof Error ? err.message : err}`);
+    console.log(`Claude command exited: ${err instanceof Error ? err.message : err}`);
   }
 }
 
