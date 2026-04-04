@@ -1,499 +1,31 @@
-// ============================================================================
-// CONTINUOUS FLOW ORCHESTRATOR — topological sort + single-session execution
-// ============================================================================
-
 import { readFile } from "fs/promises";
 import type {
   HarborBehavior,
   BehaviorContext,
   BehaviorRunner,
   VerificationSummary,
-} from "../spec-test/types";
-import { parseHarborBehaviorsWithDependencies } from "../spec-test/parsing";
-import { VerificationContext } from "../spec-test/verification-context";
+  ExampleResult,
+} from "../shared/types";
+import { parseHarborBehaviorsWithDependencies } from "../shared/index";
+import { VerificationContext } from "../shared/verification-context";
 import {
   CredentialTracker,
   processStepsWithCredentials,
-} from "../spec-test/credential-tracker";
-import { createVerificationSummary } from "../spec-test/summary";
+} from "../shared/credential-tracker";
+import { createVerificationSummary } from "../shared/summary";
 import {
   isAuthBehavior,
   withTimeout,
   DEFAULT_BEHAVIOR_TIMEOUT_MS,
-} from "../spec-test/auth-orchestrator";
+} from "../shared/auth-orchestrator";
 
-// ============================================================================
-// TOPOLOGICAL SORT — Kahn's algorithm (BFS)
-// ============================================================================
-
-/**
- * Topologically sort behaviors using Kahn's algorithm.
- *
- * Returns behaviors in an order where every behavior appears after all its
- * dependencies. Uses BFS with in-degree tracking — behaviors with zero
- * in-degree (no unsatisfied dependencies) are processed first.
- *
- * Throws if the dependency graph contains a cycle.
- */
-export function topologicalSort(
-  behaviors: Map<string, HarborBehavior>
-): HarborBehavior[] {
-  // In-degree: how many dependencies each behavior has
-  const inDegree = new Map<string, number>();
-  // Reverse adjacency: dependency → list of behaviors that depend on it
-  const dependents = new Map<string, string[]>();
-
-  for (const [id, behavior] of behaviors) {
-    inDegree.set(id, behavior.dependencies.length);
-
-    for (const dep of behavior.dependencies) {
-      const list = dependents.get(dep.behaviorId) ?? [];
-      list.push(id);
-      dependents.set(dep.behaviorId, list);
-    }
-  }
-
-  // Seed the queue with zero in-degree nodes (roots)
-  const queue: string[] = [];
-  for (const [id, degree] of inDegree) {
-    if (degree === 0) queue.push(id);
-  }
-
-  const sorted: HarborBehavior[] = [];
-
-  while (queue.length > 0) {
-    const currentId = queue.shift()!;
-    const behavior = behaviors.get(currentId);
-    if (!behavior) continue;
-
-    sorted.push(behavior);
-
-    // Decrement in-degree for all dependents
-    for (const dependentId of dependents.get(currentId) ?? []) {
-      const newDegree = (inDegree.get(dependentId) ?? 1) - 1;
-      inDegree.set(dependentId, newDegree);
-      if (newDegree === 0) queue.push(dependentId);
-    }
-  }
-
-  if (sorted.length !== behaviors.size) {
-    const remaining = [...behaviors.keys()].filter(
-      (id) => !sorted.some((b) => b.id === id)
-    );
-    throw new Error(
-      `Cycle detected in behavior dependencies. Stuck behaviors: ${remaining.join(", ")}`
-    );
-  }
-
-  return sorted;
-}
-
-// ============================================================================
-// PARTITION — separate auth from non-auth behaviors
-// ============================================================================
-
-/**
- * Split sorted behaviors into auth and non-auth groups.
- * Auth behaviors are returned in the hardcoded execution order.
- * Non-auth behaviors preserve their topological order.
- */
-export function partitionBehaviors(sorted: HarborBehavior[]): {
-  auth: HarborBehavior[];
-  nonAuth: HarborBehavior[];
-} {
-  const AUTH_ORDER = [
-    "sign-up",
-    "sign-out",
-    "sign-in",
-  ];
-
-  const authMap = new Map<string, HarborBehavior>();
-  const nonAuth: HarborBehavior[] = [];
-
-  for (const behavior of sorted) {
-    if (isAuthBehavior(behavior.id)) {
-      authMap.set(behavior.id, behavior);
-    } else {
-      nonAuth.push(behavior);
-    }
-  }
-
-  // Auth behaviors in the hardcoded order
-  const auth: HarborBehavior[] = [];
-  for (const id of AUTH_ORDER) {
-    const behavior = authMap.get(id);
-    if (behavior) auth.push(behavior);
-  }
-
-  return { auth, nonAuth };
-}
-
-// ============================================================================
-// SKIP CASCADE — transitive dependents map
-// ============================================================================
-
-/**
- * Build a map from each behavior ID to the set of all behaviors that
- * transitively depend on it. Used for skip cascading when a behavior fails.
- */
-export function buildTransitiveDependentsMap(
-  behaviors: Map<string, HarborBehavior>
-): Map<string, Set<string>> {
-  // Direct dependents: behavior → who directly depends on it
-  const directDependents = new Map<string, Set<string>>();
-  for (const [id, behavior] of behaviors) {
-    for (const dep of behavior.dependencies) {
-      const set = directDependents.get(dep.behaviorId) ?? new Set();
-      set.add(id);
-      directDependents.set(dep.behaviorId, set);
-    }
-  }
-
-  // Expand to transitive dependents via BFS
-  const transitiveMap = new Map<string, Set<string>>();
-
-  for (const id of behaviors.keys()) {
-    const visited = new Set<string>();
-    const queue = [...(directDependents.get(id) ?? [])];
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (visited.has(current)) continue;
-      visited.add(current);
-
-      for (const next of directDependents.get(current) ?? []) {
-        if (!visited.has(next)) queue.push(next);
-      }
-    }
-
-    transitiveMap.set(id, visited);
-  }
-
-  return transitiveMap;
-}
-
-/**
- * Add all transitive dependents of a failed behavior to the skip set.
- */
-function cascadeSkip(
-  failedId: string,
-  transitiveMap: Map<string, Set<string>>,
-  skipSet: Set<string>
-): void {
-  for (const dependentId of transitiveMap.get(failedId) ?? []) {
-    skipSet.add(dependentId);
-  }
-}
-
-// ============================================================================
-// AUTH FLOW — continuous
-// ============================================================================
-
-async function runAuthFlowContinuous(
-  authBehaviors: HarborBehavior[],
-  context: VerificationContext,
-  credentialTracker: CredentialTracker,
-  runner: BehaviorRunner,
-  transitiveMap: Map<string, Set<string>>,
-  skipSet: Set<string>,
-  behaviorTimeoutMs: number
-): Promise<BehaviorContext[]> {
-  const results: BehaviorContext[] = [];
-
-  if (authBehaviors.length === 0) return results;
-
-  console.log(
-    `\n=== Auth Flow (continuous): ${authBehaviors.map((b) => b.title).join(" → ")} ===\n`
-  );
-
-  for (let i = 0; i < authBehaviors.length; i++) {
-    const behavior = authBehaviors[i];
-    const isFirst = i === 0;
-    const behaviorStart = Date.now();
-
-    // Check skip set (Sign Up failure cascades to all auth)
-    if (skipSet.has(behavior.id)) {
-      const failedDep = findFailedDependency(behavior, context);
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: "dependency_failed",
-        failedDependency: failedDep,
-        duration: 0,
-      };
-      context.markResult(behavior.id, result);
-      results.push(result);
-      continue;
-    }
-
-    try {
-      if (behavior.examples.length === 0) {
-        const result: BehaviorContext = {
-          behaviorId: behavior.id,
-          behaviorName: behavior.title,
-          status: "fail",
-          error: `No examples found for behavior: ${behavior.title}`,
-          duration: 0,
-        };
-        context.markResult(behavior.id, result);
-        results.push(result);
-        cascadeSkip(behavior.id, transitiveMap, skipSet);
-        continue;
-      }
-
-      // Loop through ALL examples for this auth behavior.
-      // Sign In may have multiple scenarios (e.g., wrong credentials then valid credentials).
-      let allExamplesPassed = true;
-      let firstError: string | undefined;
-      let totalDuration = 0;
-
-      for (let j = 0; j < behavior.examples.length; j++) {
-        const example = behavior.examples[j];
-
-        const processedSteps = processStepsWithCredentials(
-          behavior,
-          example.steps,
-          credentialTracker,
-          example.name
-        );
-
-        const creds = credentialTracker.getCredentials();
-        const clearSession = isFirst && j === 0;
-        const needsReload = behavior.id === "sign-in" && j > 0;
-
-        console.log(
-          `Auth [${behavior.id}] example ${j}: ${processedSteps.length} steps, clearSession=${clearSession}, reloadPage=${needsReload}, email=${creds.email ?? "(none)"}`
-        );
-
-        const exampleToRun = { ...example, steps: processedSteps };
-
-        const exampleResult = await withTimeout(
-          runner.runExample(exampleToRun, {
-            clearSession,
-            reloadPage: needsReload,
-          }),
-          behaviorTimeoutMs,
-          `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
-        );
-
-        totalDuration += exampleResult.duration;
-
-        // Capture credentials after Sign Up
-        if (
-          behavior.id.includes("sign-up") ||
-          behavior.id.includes("signup")
-        ) {
-          for (const step of processedSteps) {
-            if (step.type === "Act") {
-              credentialTracker.captureFromStep(step.instruction);
-            }
-          }
-        }
-
-        if (!exampleResult.success) {
-          allExamplesPassed = false;
-          firstError = firstError ?? exampleResult.failedAt?.context.error;
-        }
-      }
-
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: allExamplesPassed ? "pass" : "fail",
-        error: firstError,
-        duration: totalDuration,
-      };
-
-      context.markResult(behavior.id, result);
-      results.push(result);
-
-      if (result.status === "fail") {
-        cascadeSkip(behavior.id, transitiveMap, skipSet);
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: "fail",
-        error: errorMessage.includes("timed out")
-          ? errorMessage
-          : `Unexpected error: ${errorMessage}`,
-        duration: Date.now() - behaviorStart,
-      };
-      context.markResult(behavior.id, result);
-      results.push(result);
-      cascadeSkip(behavior.id, transitiveMap, skipSet);
-    }
-  }
-
-  return results;
-}
-
-// ============================================================================
-// NON-AUTH FLOW — continuous (single session, topological order)
-// ============================================================================
-
-async function runNonAuthBehaviorsContinuous(
-  nonAuthBehaviors: HarborBehavior[],
-  context: VerificationContext,
-  credentialTracker: CredentialTracker,
-  runner: BehaviorRunner,
-  transitiveMap: Map<string, Set<string>>,
-  skipSet: Set<string>,
-  behaviorTimeoutMs: number
-): Promise<BehaviorContext[]> {
-  const results: BehaviorContext[] = [];
-
-  console.log(
-    `\n=== Non-Auth Behaviors (continuous): ${nonAuthBehaviors.length} behaviors ===\n`
-  );
-
-  for (const behavior of nonAuthBehaviors) {
-    const behaviorStart = Date.now();
-
-    // Check skip set first
-    if (skipSet.has(behavior.id)) {
-      const failedDep = findFailedDependency(behavior, context);
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: "dependency_failed",
-        failedDependency: failedDep,
-        duration: 0,
-      };
-      context.markResult(behavior.id, result);
-      results.push(result);
-      continue;
-    }
-
-    // Double-check via context (handles edge cases)
-    const depIds = behavior.dependencies.map((d) => d.behaviorId);
-    const skipCheck = context.shouldSkip(depIds);
-    if (skipCheck.skip) {
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: "dependency_failed",
-        failedDependency: skipCheck.reason,
-        duration: 0,
-      };
-      context.markResult(behavior.id, result);
-      results.push(result);
-      cascadeSkip(behavior.id, transitiveMap, skipSet);
-      continue;
-    }
-
-    try {
-      const example = behavior.examples[0];
-      if (!example) {
-        const result: BehaviorContext = {
-          behaviorId: behavior.id,
-          behaviorName: behavior.title,
-          status: "fail",
-          error: `No examples found for behavior: ${behavior.title}`,
-          duration: 0,
-        };
-        context.markResult(behavior.id, result);
-        results.push(result);
-        cascadeSkip(behavior.id, transitiveMap, skipSet);
-        continue;
-      }
-
-      const processedSteps = processStepsWithCredentials(
-        behavior,
-        example.steps,
-        credentialTracker,
-        example.name
-      );
-
-      const creds = credentialTracker.getCredentials();
-      console.log(
-        `NonAuth [${behavior.id}]: ${processedSteps.length} steps, pagePath=${behavior.pagePath ?? "(none)"}, email=${creds.email ?? "(none)"}`
-      );
-
-      const exampleToRun = { ...example, steps: processedSteps };
-
-      // Never clear session for non-auth behaviors — carry forward from auth flow
-      const exampleResult = await withTimeout(
-        runner.runExample(exampleToRun, {
-          clearSession: false,
-          navigateToPath: behavior.pagePath,
-          credentials: creds,
-        }),
-        behaviorTimeoutMs,
-        `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`
-      );
-
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: exampleResult.success ? "pass" : "fail",
-        error: exampleResult.failedAt?.context.error,
-        duration: exampleResult.duration,
-      };
-
-      context.markResult(behavior.id, result);
-      results.push(result);
-
-      if (result.status === "fail") {
-        cascadeSkip(behavior.id, transitiveMap, skipSet);
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      const result: BehaviorContext = {
-        behaviorId: behavior.id,
-        behaviorName: behavior.title,
-        status: "fail",
-        error: errorMessage.includes("timed out")
-          ? errorMessage
-          : `Unexpected error: ${errorMessage}`,
-        duration: Date.now() - behaviorStart,
-      };
-      context.markResult(behavior.id, result);
-      results.push(result);
-      cascadeSkip(behavior.id, transitiveMap, skipSet);
-    }
-  }
-
-  return results;
-}
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/** Find the name of the first failed dependency for display purposes. */
-function findFailedDependency(
-  behavior: HarborBehavior,
-  context: VerificationContext
-): string {
-  for (const dep of behavior.dependencies) {
-    const result = context.getResult(dep.behaviorId);
-    if (result && result.status !== "pass") {
-      return result.behaviorName;
-    }
-  }
-  return "unknown";
-}
-
-// ============================================================================
-// MAIN ORCHESTRATOR — continuous flow
-// ============================================================================
+// ── MAIN ORCHESTRATOR ──────────────────────────────────────────────────
 
 /**
  * Verify all behaviors in a continuous single-session flow.
  *
- * Instead of re-running dependency chains per behavior, this:
- * 1. Parses the spec and topologically sorts all behaviors
- * 2. Separates auth from non-auth behaviors
- * 3. Runs auth flow first (Sign Up → Sign Out → Sign In)
- * 4. Runs non-auth behaviors in topological order on the same session
- * 5. Cascades skips when a behavior fails (all transitive dependents are skipped)
- *
- * This results in exactly N runExample() calls for N behaviors (no re-execution).
+ * Parses → topologically sorts → auth first → non-auth in order → cascade skips.
+ * Exactly N runExample() calls for N behaviors (no re-execution).
  */
 export async function verifyAllBehaviorsContinuous(
   instructionPath: string,
@@ -517,28 +49,358 @@ export async function verifyAllBehaviorsContinuous(
   console.log(`Auth behaviors: ${auth.map((b) => b.id).join(", ") || "(none)"}`);
   console.log(`Non-auth behaviors: ${nonAuth.map((b) => b.id).join(", ") || "(none)"}\n`);
 
-  // Phase 1: Auth flow
-  const authResults = await runAuthFlowContinuous(
-    auth,
-    context,
-    credentialTracker,
-    runner,
-    transitiveMap,
-    skipSet,
-    behaviorTimeoutMs
+  const authResults = await runAuthFlow(
+    auth, context, credentialTracker, runner, transitiveMap, skipSet, behaviorTimeoutMs,
   );
 
-  // Phase 2: Non-auth flow (same session)
-  const nonAuthResults = await runNonAuthBehaviorsContinuous(
-    nonAuth,
-    context,
-    credentialTracker,
-    runner,
-    transitiveMap,
-    skipSet,
-    behaviorTimeoutMs
+  const nonAuthResults = await runNonAuthBehaviors(
+    nonAuth, context, credentialTracker, runner, transitiveMap, skipSet, behaviorTimeoutMs,
   );
 
-  const results = [...authResults, ...nonAuthResults];
-  return createVerificationSummary(results, Date.now() - startTime);
+  return createVerificationSummary([...authResults, ...nonAuthResults], Date.now() - startTime);
+}
+
+// ── EXECUTION FLOWS ────────────────────────────────────────────────────
+
+async function runAuthFlow(
+  authBehaviors: HarborBehavior[],
+  context: VerificationContext,
+  credentialTracker: CredentialTracker,
+  runner: BehaviorRunner,
+  transitiveMap: Map<string, Set<string>>,
+  skipSet: Set<string>,
+  behaviorTimeoutMs: number,
+): Promise<BehaviorContext[]> {
+  if (authBehaviors.length === 0) return [];
+
+  console.log(`\n=== Auth Flow (continuous): ${authBehaviors.map((b) => b.title).join(" → ")} ===\n`);
+
+  const results: BehaviorContext[] = [];
+
+  for (let i = 0; i < authBehaviors.length; i++) {
+    const behavior = authBehaviors[i];
+    const result = await runBehaviorWithCascade(
+      behavior, context, transitiveMap, skipSet,
+      () => runAuthBehaviorScenarios(behavior, i === 0, runner, credentialTracker, behaviorTimeoutMs),
+    );
+    results.push(result);
+  }
+
+  return results;
+}
+
+async function runNonAuthBehaviors(
+  nonAuthBehaviors: HarborBehavior[],
+  context: VerificationContext,
+  credentialTracker: CredentialTracker,
+  runner: BehaviorRunner,
+  transitiveMap: Map<string, Set<string>>,
+  skipSet: Set<string>,
+  behaviorTimeoutMs: number,
+): Promise<BehaviorContext[]> {
+  console.log(`\n=== Non-Auth Behaviors (continuous): ${nonAuthBehaviors.length} behaviors ===\n`);
+
+  const results: BehaviorContext[] = [];
+
+  for (const behavior of nonAuthBehaviors) {
+    // Non-auth behaviors also check dependency context (handles edge cases beyond skipSet)
+    const depIds = behavior.dependencies.map((d) => d.behaviorId);
+    const depCheck = context.shouldSkip(depIds);
+    if (depCheck.skip) {
+      const result = skipResult(behavior, depCheck.reason ?? "unknown");
+      context.markResult(behavior.id, result);
+      results.push(result);
+      cascadeSkip(behavior.id, transitiveMap, skipSet);
+      continue;
+    }
+
+    const result = await runBehaviorWithCascade(
+      behavior, context, transitiveMap, skipSet,
+      () => runNonAuthBehavior(behavior, runner, credentialTracker, behaviorTimeoutMs),
+    );
+    results.push(result);
+  }
+
+  return results;
+}
+
+// ── PER-BEHAVIOR EXECUTION ─────────────────────────────────────────────
+
+/**
+ * Shared wrapper: check skip → check examples → run → mark result → cascade on failure.
+ * The actual execution logic is passed as `runFn`.
+ */
+async function runBehaviorWithCascade(
+  behavior: HarborBehavior,
+  context: VerificationContext,
+  transitiveMap: Map<string, Set<string>>,
+  skipSet: Set<string>,
+  runFn: () => Promise<BehaviorContext>,
+): Promise<BehaviorContext> {
+  if (skipSet.has(behavior.id)) {
+    const result = skipResult(behavior, findFailedDependency(behavior, context));
+    context.markResult(behavior.id, result);
+    return result;
+  }
+
+  if (behavior.examples.length === 0) {
+    const result = noExamplesResult(behavior);
+    context.markResult(behavior.id, result);
+    cascadeSkip(behavior.id, transitiveMap, skipSet);
+    return result;
+  }
+
+  const startTime = Date.now();
+  try {
+    const result = await runFn();
+    context.markResult(behavior.id, result);
+    if (result.status === "fail") cascadeSkip(behavior.id, transitiveMap, skipSet);
+    return result;
+  } catch (error) {
+    const result = errorResult(behavior, error, startTime);
+    context.markResult(behavior.id, result);
+    cascadeSkip(behavior.id, transitiveMap, skipSet);
+    return result;
+  }
+}
+
+/** Run all scenarios for an auth behavior (Sign Up clears session, Sign In reloads between scenarios). */
+async function runAuthBehaviorScenarios(
+  behavior: HarborBehavior,
+  isFirst: boolean,
+  runner: BehaviorRunner,
+  credentialTracker: CredentialTracker,
+  behaviorTimeoutMs: number,
+): Promise<BehaviorContext> {
+  let firstError: string | undefined;
+  let totalDuration = 0;
+  let failed = false;
+
+  for (let j = 0; j < behavior.examples.length; j++) {
+    const example = behavior.examples[j];
+    const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker, example.name);
+
+    const clearSession = isFirst && j === 0;
+    const reloadPage = behavior.id === "sign-in" && j > 0;
+    const creds = credentialTracker.getCredentials();
+
+    console.log(
+      `Auth [${behavior.id}] example ${j}: ${processedSteps.length} steps, clearSession=${clearSession}, reloadPage=${reloadPage}, email=${creds.email ?? "(none)"}`,
+    );
+
+    const result: ExampleResult = await withTimeout(
+      runner.runExample({ ...example, steps: processedSteps }, { clearSession, reloadPage }),
+      behaviorTimeoutMs,
+      `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`,
+    );
+
+    // Capture credentials after Sign Up for subsequent auth steps
+    if (behavior.id.includes("sign-up") || behavior.id.includes("signup")) {
+      for (const step of processedSteps) {
+        if (step.type === "Act") credentialTracker.captureFromStep(step.instruction);
+      }
+    }
+
+    totalDuration += result.duration;
+    if (!result.success && !failed) {
+      failed = true;
+      firstError = result.failedAt?.context.error;
+    }
+  }
+
+  return {
+    behaviorId: behavior.id,
+    behaviorName: behavior.title,
+    status: failed ? "fail" : "pass",
+    error: firstError,
+    duration: totalDuration,
+  };
+}
+
+/** Run a single non-auth behavior (preserves session, navigates to page path). */
+async function runNonAuthBehavior(
+  behavior: HarborBehavior,
+  runner: BehaviorRunner,
+  credentialTracker: CredentialTracker,
+  behaviorTimeoutMs: number,
+): Promise<BehaviorContext> {
+  const example = behavior.examples[0];
+  const processedSteps = processStepsWithCredentials(behavior, example.steps, credentialTracker, example.name);
+  const creds = credentialTracker.getCredentials();
+
+  console.log(
+    `NonAuth [${behavior.id}]: ${processedSteps.length} steps, pagePath=${behavior.pagePath ?? "(none)"}, email=${creds.email ?? "(none)"}`,
+  );
+
+  const result = await withTimeout(
+    runner.runExample(
+      { ...example, steps: processedSteps },
+      { clearSession: false, navigateToPath: behavior.pagePath, credentials: creds },
+    ),
+    behaviorTimeoutMs,
+    `Behavior "${behavior.title}" timed out after ${behaviorTimeoutMs / 1000}s`,
+  );
+
+  return {
+    behaviorId: behavior.id,
+    behaviorName: behavior.title,
+    status: result.success ? "pass" : "fail",
+    error: result.failedAt?.context.error,
+    duration: result.duration,
+  };
+}
+
+// ── RESULT BUILDERS ────────────────────────────────────────────────────
+
+function skipResult(behavior: HarborBehavior, failedDep: string): BehaviorContext {
+  return {
+    behaviorId: behavior.id,
+    behaviorName: behavior.title,
+    status: "dependency_failed",
+    failedDependency: failedDep,
+    duration: 0,
+  };
+}
+
+function noExamplesResult(behavior: HarborBehavior): BehaviorContext {
+  return {
+    behaviorId: behavior.id,
+    behaviorName: behavior.title,
+    status: "fail",
+    error: `No examples found for behavior: ${behavior.title}`,
+    duration: 0,
+  };
+}
+
+function errorResult(behavior: HarborBehavior, error: unknown, startTime: number): BehaviorContext {
+  const msg = error instanceof Error ? error.message : String(error);
+  return {
+    behaviorId: behavior.id,
+    behaviorName: behavior.title,
+    status: "fail",
+    error: msg.includes("timed out") ? msg : `Unexpected error: ${msg}`,
+    duration: Date.now() - startTime,
+  };
+}
+
+function findFailedDependency(behavior: HarborBehavior, context: VerificationContext): string {
+  for (const dep of behavior.dependencies) {
+    const result = context.getResult(dep.behaviorId);
+    if (result && result.status !== "pass") return result.behaviorName;
+  }
+  return "unknown";
+}
+
+function cascadeSkip(
+  failedId: string,
+  transitiveMap: Map<string, Set<string>>,
+  skipSet: Set<string>,
+): void {
+  for (const dependentId of transitiveMap.get(failedId) ?? []) {
+    skipSet.add(dependentId);
+  }
+}
+
+// ── PURE UTILITIES (exported) ──────────────────────────────────────────
+
+/** Topologically sort behaviors using Kahn's algorithm. Throws on cycles. */
+export function topologicalSort(
+  behaviors: Map<string, HarborBehavior>
+): HarborBehavior[] {
+  const inDegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+
+  for (const [id, behavior] of behaviors) {
+    inDegree.set(id, behavior.dependencies.length);
+    for (const dep of behavior.dependencies) {
+      const list = dependents.get(dep.behaviorId) ?? [];
+      list.push(id);
+      dependents.set(dep.behaviorId, list);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [id, degree] of inDegree) {
+    if (degree === 0) queue.push(id);
+  }
+
+  const sorted: HarborBehavior[] = [];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    const behavior = behaviors.get(currentId);
+    if (!behavior) continue;
+
+    sorted.push(behavior);
+
+    for (const dependentId of dependents.get(currentId) ?? []) {
+      const newDegree = (inDegree.get(dependentId) ?? 1) - 1;
+      inDegree.set(dependentId, newDegree);
+      if (newDegree === 0) queue.push(dependentId);
+    }
+  }
+
+  if (sorted.length !== behaviors.size) {
+    const remaining = [...behaviors.keys()].filter(
+      (id) => !sorted.some((b) => b.id === id),
+    );
+    throw new Error(
+      `Cycle detected in behavior dependencies. Stuck behaviors: ${remaining.join(", ")}`,
+    );
+  }
+
+  return sorted;
+}
+
+const AUTH_ORDER = ["sign-up", "sign-out", "sign-in"];
+
+/** Split behaviors into auth (hardcoded order) and non-auth (preserve topological order). */
+export function partitionBehaviors(sorted: HarborBehavior[]): {
+  auth: HarborBehavior[];
+  nonAuth: HarborBehavior[];
+} {
+  const authMap = new Map<string, HarborBehavior>();
+  const nonAuth: HarborBehavior[] = [];
+
+  for (const behavior of sorted) {
+    if (isAuthBehavior(behavior.id)) {
+      authMap.set(behavior.id, behavior);
+    } else {
+      nonAuth.push(behavior);
+    }
+  }
+
+  const auth = AUTH_ORDER
+    .map((id) => authMap.get(id))
+    .filter((b): b is HarborBehavior => b !== undefined);
+
+  return { auth, nonAuth };
+}
+
+/** Build a map from each behavior ID to all behaviors that transitively depend on it. */
+export function buildTransitiveDependentsMap(
+  behaviors: Map<string, HarborBehavior>
+): Map<string, Set<string>> {
+  const directDependents = new Map<string, Set<string>>();
+  for (const [id, behavior] of behaviors) {
+    for (const dep of behavior.dependencies) {
+      const set = directDependents.get(dep.behaviorId) ?? new Set();
+      set.add(id);
+      directDependents.set(dep.behaviorId, set);
+    }
+  }
+
+  // Iterate in reverse topological order so each node's dependents are already computed
+  const sorted = topologicalSort(behaviors);
+  const transitiveMap = new Map<string, Set<string>>();
+
+  for (const behavior of sorted.reverse()) {
+    const allDeps = new Set(
+      [...(directDependents.get(behavior.id) ?? [])]
+        .flatMap(dep => [dep, ...(transitiveMap.get(dep) ?? [])])
+    );
+    transitiveMap.set(behavior.id, allDeps);
+  }
+
+  return transitiveMap;
 }
