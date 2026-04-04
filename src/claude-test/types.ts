@@ -51,6 +51,8 @@ export interface ClaudeVerifierOptions {
   maxBudgetUsd?: number;
   /** Timeout in seconds (default: 3600) */
   timeoutSec?: number;
+  /** Use --verbose instead of --print for streaming output (default: false) */
+  verbose?: boolean;
 }
 
 export type { VerificationSummary };

@@ -7,6 +7,8 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { execSync } from "child_process";
+import { tmpdir } from "os";
+import path from "path";
 import { parseHarborBehaviorsWithDependencies } from "../shared/index";
 import { buildPlanFromBehaviors } from "./plan-builder";
 import type { ClaudeVariantConfig, ClaudeVerifierOptions, VerificationSummary } from "./types";
@@ -15,7 +17,9 @@ import type { BehaviorContext } from "../shared/types";
 const SYSTEM_PROMPT_PATH = "/tmp/system-prompt.md";
 const VERIFICATION_PLAN_PATH = "/tmp/verification-plan.md";
 const USER_PROMPT_PATH = "/tmp/prompt.txt";
-const RESULTS_CSV_PATH = "/logs/agent/results.csv";
+// Docker uses /logs/agent; local runs use a temp dir to avoid permission errors
+const RESULTS_DIR = process.env.CLAUDE_VERIFIER_RESULTS_DIR ?? path.join(tmpdir(), "claude-verifier");
+const RESULTS_CSV_PATH = path.join(RESULTS_DIR, "results.csv");
 
 const DEFAULT_MAX_TURNS = 200;
 const DEFAULT_MAX_BUDGET_USD = 5;
@@ -33,6 +37,7 @@ export async function runClaudeVerifier(
     maxTurns: options?.maxTurns ?? DEFAULT_MAX_TURNS,
     maxBudgetUsd: options?.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
     timeoutSec: options?.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
+    verbose: options?.verbose ?? false,
   };
 
   const startTime = Date.now();
@@ -82,10 +87,10 @@ function buildAndWriteVerificationFiles(
   writeToFile(SYSTEM_PROMPT_PATH, buildSystemPrompt(config.toolPrompt));
   writeToFile(VERIFICATION_PLAN_PATH, plan);
   writeToFile(USER_PROMPT_PATH,
-    "Read the verification plan at /tmp/verification-plan.md " +
+    `Read the verification plan at ${VERIFICATION_PLAN_PATH} ` +
     "and verify each behavior in order.\n\n" +
     "The app is running at http://localhost:3000.\n\n" +
-    "Write results to /logs/agent/results.csv when done.",
+    `Write results to ${RESULTS_CSV_PATH} when done.`,
   );
 
   return { allBehaviorIds: behaviors.map((b) => b.id), credCtx };
@@ -96,7 +101,7 @@ function executeClaudeCommand(
   opts: Required<ClaudeVerifierOptions>,
   claudeEnv: Record<string, string>,
 ): void {
-  mkdirSync("/logs/agent", { recursive: true });
+  mkdirSync(RESULTS_DIR, { recursive: true });
   const command = buildClaudeCommand(config, opts);
   console.log(`Executing: ${command}`);
 
@@ -195,17 +200,17 @@ edit-post,fail,"Edit button not found on post page"
 ${toolPrompt}`;
 }
 
-function writeToFile(path: string, content: string): void {
-  const dir = path.substring(0, path.lastIndexOf("/"));
-  if (dir) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, content, "utf-8");
+function writeToFile(filePath: string, content: string): void {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content, "utf-8");
 }
 
 function buildClaudeCommand(
   config: ClaudeVariantConfig,
   options: Required<ClaudeVerifierOptions>,
 ): string {
-  const parts = ["claude", "--print"];
+  const mode = options.verbose ? "--verbose" : "--print";
+  const parts = ["claude", mode, "--dangerously-skip-permissions"];
 
   if (config.mcpConfigPath) parts.push(`--mcp-config ${config.mcpConfigPath}`);
   if (config.allowedTools) parts.push(`--allowedTools ${config.allowedTools}`);
