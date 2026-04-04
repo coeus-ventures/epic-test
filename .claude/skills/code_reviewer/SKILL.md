@@ -110,6 +110,7 @@ Watch for: God objects, spaghetti code, cargo cult programming, premature optimi
 - Longest function: [name] at [N] lines
 - Max nesting depth: [N] levels in [location]
 - Functions exceeding 50 lines: [count]
+- For loops (imperative): [count] — note which could be declarative pipelines
 - DRY violations: [count]
 - Speculative code instances: [count]
 ```

@@ -3,8 +3,6 @@
  *
  * Orchestrates: parse instruction → build plan → write files →
  * exec `claude --print` → parse results CSV → output reward + results.
- *
- * Ported from verifier-bench/verifiers/claude_base.py.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
@@ -18,13 +16,139 @@ const SYSTEM_PROMPT_PATH = "/tmp/system-prompt.md";
 const VERIFICATION_PLAN_PATH = "/tmp/verification-plan.md";
 const USER_PROMPT_PATH = "/tmp/prompt.txt";
 const RESULTS_CSV_PATH = "/logs/agent/results.csv";
-const OUTPUT_DIR = "/logs/verifier";
 
 const DEFAULT_MAX_TURNS = 200;
 const DEFAULT_MAX_BUDGET_USD = 5;
 const DEFAULT_TIMEOUT_SEC = 3600;
 
-// ─── System Prompt ───────────────────────────────────────────────────
+/**
+ * Run a Claude-based verifier against a Harbor task.
+ */
+export async function runClaudeVerifier(
+  instructionPath: string,
+  config: ClaudeVariantConfig,
+  options?: ClaudeVerifierOptions,
+): Promise<VerificationSummary> {
+  const opts: Required<ClaudeVerifierOptions> = {
+    maxTurns: options?.maxTurns ?? DEFAULT_MAX_TURNS,
+    maxBudgetUsd: options?.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
+    timeoutSec: options?.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
+  };
+
+  const startTime = Date.now();
+
+  const claudeEnv = setupClaudeEnvironment(config);
+  const { allBehaviorIds, credCtx } = buildAndWriteVerificationFiles(instructionPath, config);
+  executeClaudeCommand(config, opts, claudeEnv);
+
+  const duration = Date.now() - startTime;
+  const rows = parseResultsCsv(RESULTS_CSV_PATH);
+  const summary = csvToSummary(rows, allBehaviorIds, duration);
+
+  if (credCtx) console.log(`Signup email used: ${credCtx.signupEmailUnique}`);
+
+  return summary;
+}
+
+function setupClaudeEnvironment(config: ClaudeVariantConfig): Record<string, string> {
+  console.log(`Setting up ${config.name} verifier...`);
+  ensureClaudeCli();
+  bypassOnboarding();
+  const claudeEnv = ensureAuth();
+
+  if (config.installCommand) {
+    console.log(`Installing browser tool: ${config.installCommand}`);
+    execSync(config.installCommand, { stdio: "inherit", timeout: 120_000 });
+  }
+
+  if (config.setupCommands) {
+    for (const cmd of config.setupCommands) {
+      execSync(cmd, { stdio: "inherit" });
+    }
+  }
+
+  return claudeEnv;
+}
+
+function buildAndWriteVerificationFiles(
+  instructionPath: string, config: ClaudeVariantConfig,
+): { allBehaviorIds: string[]; credCtx: ReturnType<typeof buildPlanFromBehaviors>["credCtx"] } {
+  console.log("Parsing instruction.md and building verification plan...");
+  const instructionContent = readFileSync(instructionPath, "utf-8");
+  const behaviorsMap = parseHarborBehaviorsWithDependencies(instructionContent);
+  const behaviors = Array.from(behaviorsMap.values());
+  const { plan, credCtx } = buildPlanFromBehaviors(behaviors);
+
+  writeToFile(SYSTEM_PROMPT_PATH, buildSystemPrompt(config.toolPrompt));
+  writeToFile(VERIFICATION_PLAN_PATH, plan);
+  writeToFile(USER_PROMPT_PATH,
+    "Read the verification plan at /tmp/verification-plan.md " +
+    "and verify each behavior in order.\n\n" +
+    "The app is running at http://localhost:3000.\n\n" +
+    "Write results to /logs/agent/results.csv when done.",
+  );
+
+  return { allBehaviorIds: behaviors.map((b) => b.id), credCtx };
+}
+
+function executeClaudeCommand(
+  config: ClaudeVariantConfig,
+  opts: Required<ClaudeVerifierOptions>,
+  claudeEnv: Record<string, string>,
+): void {
+  mkdirSync("/logs/agent", { recursive: true });
+  const command = buildClaudeCommand(config, opts);
+  console.log(`Executing: ${command}`);
+
+  try {
+    execSync(command, {
+      env: { ...process.env, ...claudeEnv },
+      stdio: "inherit",
+      timeout: opts.timeoutSec * 1000,
+      shell: "/bin/bash",
+    });
+  } catch (err) {
+    // Non-fatal — Claude may have written results before erroring
+    console.log(`Claude command exited with error: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+function ensureClaudeCli(): void {
+  try {
+    execSync("which claude", { stdio: "ignore" });
+  } catch {
+    console.log("Claude CLI not found, installing...");
+    execSync("curl -fsSL https://claude.ai/install.sh | sh", { stdio: "inherit" });
+  }
+}
+
+function bypassOnboarding(): void {
+  try {
+    execSync('mkdir -p ~/.claude');
+    writeFileSync(
+      `${process.env.HOME || "/root"}/.claude.json`,
+      JSON.stringify({ hasCompletedOnboarding: true }),
+    );
+  } catch { /* best effort */ }
+}
+
+function ensureAuth(): Record<string, string> {
+  const env: Record<string, string> = {};
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+
+  const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+
+  if (Object.keys(env).length === 0) {
+    throw new Error(
+      "No Claude authentication found. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.",
+    );
+  }
+
+  return env;
+}
 
 function buildSystemPrompt(toolPrompt: string): string {
   return `# Web Application Verification Agent
@@ -71,59 +195,11 @@ edit-post,fail,"Edit button not found on post page"
 ${toolPrompt}`;
 }
 
-// ─── File Writing (base64 to avoid shell escaping) ───────────────────
-
 function writeToFile(path: string, content: string): void {
   const dir = path.substring(0, path.lastIndexOf("/"));
   if (dir) mkdirSync(dir, { recursive: true });
   writeFileSync(path, content, "utf-8");
 }
-
-// ─── Setup ───────────────────────────────────────────────────────────
-
-function ensureClaudeCli(): void {
-  try {
-    execSync("which claude", { stdio: "ignore" });
-  } catch {
-    console.log("Claude CLI not found, installing...");
-    execSync("curl -fsSL https://claude.ai/install.sh | sh", {
-      stdio: "inherit",
-    });
-  }
-}
-
-function bypassOnboarding(): void {
-  try {
-    execSync('mkdir -p ~/.claude');
-    writeFileSync(
-      `${process.env.HOME || "/root"}/.claude.json`,
-      JSON.stringify({ hasCompletedOnboarding: true }),
-    );
-  } catch {
-    // Best effort
-  }
-}
-
-function ensureAuth(): Record<string, string> {
-  const env: Record<string, string> = {};
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
-
-  const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-
-  if (Object.keys(env).length === 0) {
-    throw new Error(
-      "No Claude authentication found. " +
-      "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.",
-    );
-  }
-
-  return env;
-}
-
-// ─── Command Building ────────────────────────────────────────────────
 
 function buildClaudeCommand(
   config: ClaudeVariantConfig,
@@ -131,13 +207,8 @@ function buildClaudeCommand(
 ): string {
   const parts = ["claude", "--print"];
 
-  if (config.mcpConfigPath) {
-    parts.push(`--mcp-config ${config.mcpConfigPath}`);
-  }
-
-  if (config.allowedTools) {
-    parts.push(`--allowedTools ${config.allowedTools}`);
-  }
+  if (config.mcpConfigPath) parts.push(`--mcp-config ${config.mcpConfigPath}`);
+  if (config.allowedTools) parts.push(`--allowedTools ${config.allowedTools}`);
 
   parts.push(`--append-system-prompt-file ${SYSTEM_PROMPT_PATH}`);
   parts.push(`--max-turns ${options.maxTurns}`);
@@ -146,8 +217,6 @@ function buildClaudeCommand(
 
   return parts.join(" ");
 }
-
-// ─── CSV Parsing ─────────────────────────────────────────────────────
 
 interface CsvRow {
   behaviorId: string;
@@ -161,29 +230,28 @@ function parseResultsCsv(csvPath: string): CsvRow[] {
   const content = readFileSync(csvPath, "utf-8").trim();
   const lines = content.split("\n").filter((l) => l.trim());
 
-  // Skip header
   const dataLines = lines[0]?.toLowerCase().includes("behavior_id")
     ? lines.slice(1)
     : lines;
 
-  return dataLines.map((line) => {
-    // Handle CSV with quoted fields
-    const match = line.match(/^([^,]+),\s*(pass|fail)\s*,\s*"?([^"]*)"?\s*$/i);
-    if (match) {
-      return {
-        behaviorId: match[1].trim(),
-        result: match[2].trim().toLowerCase() as "pass" | "fail",
-        reason: match[3].trim(),
-      };
-    }
-    // Fallback: simple split
-    const parts = line.split(",").map((p) => p.trim());
+  return dataLines.map(parseCsvLine);
+}
+
+function parseCsvLine(line: string): CsvRow {
+  const match = line.match(/^([^,]+),\s*(pass|fail)\s*,\s*"?([^"]*)"?\s*$/i);
+  if (match) {
     return {
-      behaviorId: parts[0] ?? "unknown",
-      result: (parts[1]?.toLowerCase() === "pass" ? "pass" : "fail") as "pass" | "fail",
-      reason: parts.slice(2).join(",").replace(/^"|"$/g, "").trim(),
+      behaviorId: match[1].trim(),
+      result: match[2].trim().toLowerCase() as "pass" | "fail",
+      reason: match[3].trim(),
     };
-  });
+  }
+  const parts = line.split(",").map((p) => p.trim());
+  return {
+    behaviorId: parts[0] ?? "unknown",
+    result: (parts[1]?.toLowerCase() === "pass" ? "pass" : "fail") as "pass" | "fail",
+    reason: parts.slice(2).join(",").replace(/^"|"$/g, "").trim(),
+  };
 }
 
 function csvToSummary(
@@ -211,103 +279,8 @@ function csvToSummary(
   const reward = total > 0 ? passed / total : 0;
 
   return {
-    passed,
-    failed,
-    dependency_failed: depFailed,
-    total,
-    reward,
+    passed, failed, dependency_failed: depFailed, total, reward,
     summary: `${passed}/${total} behaviors passed`,
-    behaviors,
-    duration,
+    behaviors, duration,
   };
-}
-
-// ─── Main Entry Point ────────────────────────────────────────────────
-
-/**
- * Run a Claude-based verifier against a Harbor task.
- *
- * @param instructionPath - Path to instruction.md inside the container
- * @param config - Variant configuration (mcp, agent-browser, or playwright-cli)
- * @param options - Optional overrides for turns, budget, timeout
- */
-export async function runClaudeVerifier(
-  instructionPath: string,
-  config: ClaudeVariantConfig,
-  options?: ClaudeVerifierOptions,
-): Promise<VerificationSummary> {
-  const opts: Required<ClaudeVerifierOptions> = {
-    maxTurns: options?.maxTurns ?? DEFAULT_MAX_TURNS,
-    maxBudgetUsd: options?.maxBudgetUsd ?? DEFAULT_MAX_BUDGET_USD,
-    timeoutSec: options?.timeoutSec ?? DEFAULT_TIMEOUT_SEC,
-  };
-
-  const startTime = Date.now();
-
-  // 1. Setup
-  console.log(`Setting up ${config.name} verifier...`);
-  ensureClaudeCli();
-  bypassOnboarding();
-  const claudeEnv = ensureAuth();
-
-  // Install variant tool if needed
-  if (config.installCommand) {
-    console.log(`Installing browser tool: ${config.installCommand}`);
-    execSync(config.installCommand, { stdio: "inherit", timeout: 120_000 });
-  }
-
-  // Run setup commands (e.g., write MCP config)
-  if (config.setupCommands) {
-    for (const cmd of config.setupCommands) {
-      execSync(cmd, { stdio: "inherit" });
-    }
-  }
-
-  // 2. Parse instruction and build plan
-  console.log("Parsing instruction.md and building verification plan...");
-  const instructionContent = readFileSync(instructionPath, "utf-8");
-  const behaviorsMap = parseHarborBehaviorsWithDependencies(instructionContent);
-  const behaviors = Array.from(behaviorsMap.values());
-  const { plan, credCtx } = buildPlanFromBehaviors(behaviors);
-
-  const allBehaviorIds = behaviors.map((b) => b.id);
-
-  // 3. Write files
-  const systemPrompt = buildSystemPrompt(config.toolPrompt);
-  writeToFile(SYSTEM_PROMPT_PATH, systemPrompt);
-  writeToFile(VERIFICATION_PLAN_PATH, plan);
-  writeToFile(USER_PROMPT_PATH,
-    "Read the verification plan at /tmp/verification-plan.md " +
-    "and verify each behavior in order.\n\n" +
-    "The app is running at http://localhost:3000.\n\n" +
-    "Write results to /logs/agent/results.csv when done.",
-  );
-
-  // 4. Build and execute claude command
-  mkdirSync("/logs/agent", { recursive: true });
-  const command = buildClaudeCommand(config, opts);
-  console.log(`Executing: ${command}`);
-
-  try {
-    execSync(command, {
-      env: { ...process.env, ...claudeEnv },
-      stdio: "inherit",
-      timeout: opts.timeoutSec * 1000,
-      shell: "/bin/bash",
-    });
-  } catch (err) {
-    console.log(`Claude command exited with error: ${err instanceof Error ? err.message : err}`);
-    // Non-fatal — Claude may have written results before erroring
-  }
-
-  // 5. Parse results
-  const duration = Date.now() - startTime;
-  const rows = parseResultsCsv(RESULTS_CSV_PATH);
-  const summary = csvToSummary(rows, allBehaviorIds, duration);
-
-  if (credCtx) {
-    console.log(`Signup email used: ${credCtx.signupEmailUnique}`);
-  }
-
-  return summary;
 }
