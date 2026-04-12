@@ -127,7 +127,7 @@ function executeClaudeCommand(
 
   try {
     execSync(wrapper, {
-      env: { ...process.env, ...claudeEnv },
+      env: { ...process.env, ...claudeEnv, CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS: "1" },
       stdio: "inherit",
       timeout: opts.timeoutSec * 1000,
       shell: "/bin/bash",
@@ -149,10 +149,16 @@ function ensureClaudeCli(): void {
 
 function bypassOnboarding(): void {
   try {
-    execSync('mkdir -p ~/.claude');
+    const home = process.env.HOME || "/root";
+    execSync(`mkdir -p ${home}/.claude`);
     writeFileSync(
-      `${process.env.HOME || "/root"}/.claude.json`,
-      JSON.stringify({ hasCompletedOnboarding: true }),
+      `${home}/.claude.json`,
+      JSON.stringify({
+        hasCompletedOnboarding: true,
+        projects: {
+          "/app": { hasTrustDialogAccepted: true },
+        },
+      }),
     );
   } catch { /* best effort */ }
 }
@@ -230,7 +236,7 @@ function buildClaudeCommand(
   options: Required<ClaudeVerifierOptions>,
 ): string {
   const mode = options.verbose ? "--verbose" : "--print";
-  const parts = ["claude", mode, "--dangerously-skip-permissions"];
+  const parts = ["claude", mode];
 
   if (config.mcpConfigPath) parts.push(`--mcp-config ${config.mcpConfigPath}`);
   if (config.allowedTools) parts.push(`--allowedTools ${config.allowedTools}`);
